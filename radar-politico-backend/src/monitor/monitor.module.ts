@@ -7,5 +7,6 @@ import { AlertsModule } from '../alerts/alerts.module';
 @Module({
   imports: [ScheduleModule.forRoot(), ScraperModule, AlertsModule],
   providers: [MonitorService],
+  exports: [MonitorService],
 })
 export class MonitorModule {}
