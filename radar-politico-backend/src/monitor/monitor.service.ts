@@ -1,37 +1,17 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Cron } from '@nestjs/schedule';
 import { ScraperService } from '../scraper/scraper.service';
 import { AlertsService } from '../alerts/alerts.service';
 import Redis from 'ioredis';
 
 const KEYWORDS = [
   'Pemex',
-  'Pemex Sener',
-  'Pemex Juan Carlos Carpio',
-  'Pemex Director General',
-  'Pemex Hidrocarburos',
-  'Pemex Huachicol',
-  'Pemex Toma Clandestina',
-  'Pemex Gas',
-  'Pemex Diesel',
-  'Pemex Gasolina',
-  'Pemex Petroleo',
-  'Refineria Cadereyta',
-  'Pemex Contaminacion',
-  'Pemex Desabasto',
-  'Pemex Robo combustible',
-  'Pemex Ducto',
-  'Pemex Poliducto',
-  'Pemex Gasoducto',
-  'Pemex Pipa',
-  'Pemex Autotanque',
-  'Pemex Terminal almacenamiento',
-  'Pemex TAD',
-  'Pemex Gas LP',
-  'Pemex Incendio',
-  'Pemex Explosion',
-  'Pemex Derrame',
-  'Pemex Fuga',
+  'Sener Mexico',
+  'Juan Carlos Carpio Fragoso',
+  'Hidrocarburos Mexico',
+  'Huachicol',
+  'Toma clandestina combustible',
+  'Gasolina Mexico',
 ];
 
 @Injectable()
@@ -50,7 +30,7 @@ export class MonitorService implements OnModuleInit {
     this.logger.log('Redis conectado');
   }
 
-  @Cron(CronExpression.EVERY_5_MINUTES)
+  @Cron('0 */30 * * * *')
   async monitorear() {
     if (this.corriendo) {
       this.logger.warn('Ciclo anterior aun en proceso, saltando...');
@@ -63,7 +43,6 @@ export class MonitorService implements OnModuleInit {
       const hace24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
       for (const keyword of KEYWORDS) {
-        await new Promise(r => setTimeout(r, 4000));
         const noticias = await this.scraperService.scrapearGoogleNews(keyword);
         for (const noticia of noticias) {
           if (new Date(noticia.fecha) < hace24h) continue;
