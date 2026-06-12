@@ -37,6 +37,7 @@ const KEYWORDS = [
 export class MonitorService {
   private readonly logger = new Logger(MonitorService.name);
   private readonly enviadas = new Set<string>();
+  private corriendo = false;
 
   constructor(
     private readonly scraperService: ScraperService,
@@ -45,19 +46,30 @@ export class MonitorService {
 
   @Cron(CronExpression.EVERY_5_MINUTES)
   async monitorear() {
-    this.logger.log('Iniciando monitoreo ' + new Date().toLocaleString('es-MX'));
-    for (const keyword of KEYWORDS) {
-      const noticias = await this.scraperService.scrapearGoogleNews(keyword);
-      const hace24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      for (const noticia of noticias) {
-        const fechaNoticia = new Date(noticia.fecha);
-        if (fechaNoticia < hace24h) continue;
-        if (this.enviadas.has(noticia.url)) continue;
-        this.enviadas.add(noticia.url);
-        await this.alertsService.enviarAlerta(noticia);
-        await new Promise(r => setTimeout(r, 1000));
-      }
+    if (this.corriendo) {
+      this.logger.warn('Ciclo anterior aun en proceso, saltando...');
+      return;
     }
-    this.logger.log('Cache: ' + this.enviadas.size + ' URLs');
+    this.corriendo = true;
+
+    try {
+      this.logger.log('Iniciando monitoreo ' + new Date().toLocaleString('es-MX'));
+      const hace24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+      for (const keyword of KEYWORDS) {
+        const noticias = await this.scraperService.scrapearGoogleNews(keyword);
+        for (const noticia of noticias) {
+          if (new Date(noticia.fecha) < hace24h) continue;
+          if (this.enviadas.has(noticia.url)) continue;
+          this.enviadas.add(noticia.url);
+          await this.alertsService.enviarAlerta(noticia);
+          await new Promise(r => setTimeout(r, 1500));
+        }
+      }
+
+      this.logger.log('Monitoreo completado. Cache: ' + this.enviadas.size + ' URLs');
+    } finally {
+      this.corriendo = false;
+    }
   }
 }
