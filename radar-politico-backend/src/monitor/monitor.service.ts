@@ -48,7 +48,10 @@ export class MonitorService {
     this.logger.log('Iniciando monitoreo ' + new Date().toLocaleString('es-MX'));
     for (const keyword of KEYWORDS) {
       const noticias = await this.scraperService.scrapearGoogleNews(keyword);
+      const hace24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
       for (const noticia of noticias) {
+        const fechaNoticia = new Date(noticia.fecha);
+        if (fechaNoticia < hace24h) continue;
         if (this.enviadas.has(noticia.url)) continue;
         this.enviadas.add(noticia.url);
         await this.alertsService.enviarAlerta(noticia);
