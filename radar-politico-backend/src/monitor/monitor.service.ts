@@ -26,7 +26,7 @@ export class MonitorService implements OnModuleInit {
   ) {}
 
   onModuleInit() {
-    this.redis = new Redis(process.env.REDIS_URL);
+    this.redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
     this.logger.log('Redis conectado');
   }
 
