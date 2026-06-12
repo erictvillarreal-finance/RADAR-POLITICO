@@ -63,6 +63,7 @@ export class MonitorService implements OnModuleInit {
       const hace24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
       for (const keyword of KEYWORDS) {
+        await new Promise(r => setTimeout(r, 4000));
         const noticias = await this.scraperService.scrapearGoogleNews(keyword);
         for (const noticia of noticias) {
           if (new Date(noticia.fecha) < hace24h) continue;
