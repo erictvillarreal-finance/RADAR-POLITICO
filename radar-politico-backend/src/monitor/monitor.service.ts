@@ -1,7 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ScraperService } from '../scraper/scraper.service';
 import { AlertsService } from '../alerts/alerts.service';
+import Redis from 'ioredis';
 
 const KEYWORDS = [
   'Pemex',
@@ -34,15 +35,20 @@ const KEYWORDS = [
 ];
 
 @Injectable()
-export class MonitorService {
+export class MonitorService implements OnModuleInit {
   private readonly logger = new Logger(MonitorService.name);
-  private readonly enviadas = new Set<string>();
   private corriendo = false;
+  private redis: Redis;
 
   constructor(
     private readonly scraperService: ScraperService,
     private readonly alertsService: AlertsService,
   ) {}
+
+  onModuleInit() {
+    this.redis = new Redis(process.env.REDIS_URL);
+    this.logger.log('Redis conectado');
+  }
 
   @Cron(CronExpression.EVERY_5_MINUTES)
   async monitorear() {
@@ -60,14 +66,16 @@ export class MonitorService {
         const noticias = await this.scraperService.scrapearGoogleNews(keyword);
         for (const noticia of noticias) {
           if (new Date(noticia.fecha) < hace24h) continue;
-          if (this.enviadas.has(noticia.url)) continue;
-          this.enviadas.add(noticia.url);
+          const key = 'enviada:' + Buffer.from(noticia.url).toString('base64').slice(0, 40);
+          const yaEnviada = await this.redis.get(key);
+          if (yaEnviada) continue;
+          await this.redis.set(key, '1', 'EX', 86400);
           await this.alertsService.enviarAlerta(noticia);
           await new Promise(r => setTimeout(r, 1500));
         }
       }
 
-      this.logger.log('Monitoreo completado. Cache: ' + this.enviadas.size + ' URLs');
+      this.logger.log('Monitoreo completado');
     } finally {
       this.corriendo = false;
     }
