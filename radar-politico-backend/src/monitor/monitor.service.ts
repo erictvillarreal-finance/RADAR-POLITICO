@@ -3,7 +3,35 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { ScraperService } from '../scraper/scraper.service';
 import { AlertsService } from '../alerts/alerts.service';
 
-const KEYWORDS = ['Pemex'];
+const KEYWORDS = [
+  'Pemex',
+  'Pemex Sener',
+  'Pemex Juan Carlos Carpio',
+  'Pemex Director General',
+  'Pemex Hidrocarburos',
+  'Pemex Huachicol',
+  'Pemex Toma Clandestina',
+  'Pemex Gas',
+  'Pemex Diesel',
+  'Pemex Gasolina',
+  'Pemex Petroleo',
+  'Refineria Cadereyta',
+  'Pemex Contaminacion',
+  'Pemex Desabasto',
+  'Pemex Robo combustible',
+  'Pemex Ducto',
+  'Pemex Poliducto',
+  'Pemex Gasoducto',
+  'Pemex Pipa',
+  'Pemex Autotanque',
+  'Pemex Terminal almacenamiento',
+  'Pemex TAD',
+  'Pemex Gas LP',
+  'Pemex Incendio',
+  'Pemex Explosion',
+  'Pemex Derrame',
+  'Pemex Fuga',
+];
 
 @Injectable()
 export class MonitorService {
