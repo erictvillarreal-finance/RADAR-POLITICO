@@ -8,10 +8,30 @@ const KEYWORDS = [
   'Pemex',
   'Sener Mexico',
   'Juan Carlos Carpio Fragoso',
+  'Director General Pemex',
   'Hidrocarburos Mexico',
   'Huachicol',
-  'Toma clandestina combustible',
-  'Gasolina Mexico',
+  'Toma Clandestina combustible',
+  'Pemex Gas',
+  'Pemex Diesel',
+  'Pemex Gasolina',
+  'Pemex Petroleo',
+  'Refineria Cadereyta',
+  'Pemex Contaminacion',
+  'Pemex Desabasto',
+  'Robo combustible Mexico',
+  'Pemex Ducto',
+  'Pemex Poliducto',
+  'Pemex Gasoducto',
+  'Pemex Pipa',
+  'Pemex Autotanque',
+  'Pemex Terminal almacenamiento',
+  'Pemex TAD',
+  'Pemex Gas LP',
+  'Pemex Incendio',
+  'Pemex Explosion',
+  'Pemex Derrame',
+  'Pemex Fuga',
 ];
 
 @Injectable()
@@ -26,7 +46,7 @@ export class MonitorService implements OnModuleInit {
   ) {}
 
   onModuleInit() {
-    this.redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
+    this.redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
     this.logger.log('Redis conectado');
   }
 
@@ -43,7 +63,9 @@ export class MonitorService implements OnModuleInit {
       const hace24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
       for (const keyword of KEYWORDS) {
+        await new Promise(r => setTimeout(r, 15000));
         const noticias = await this.scraperService.scrapearGoogleNews(keyword);
+
         for (const noticia of noticias) {
           if (new Date(noticia.fecha) < hace24h) continue;
           const key = 'enviada:' + Buffer.from(noticia.url).toString('base64').slice(0, 40);
@@ -51,7 +73,7 @@ export class MonitorService implements OnModuleInit {
           if (yaEnviada) continue;
           await this.redis.set(key, '1', 'EX', 86400);
           await this.alertsService.enviarAlerta(noticia);
-          await new Promise(r => setTimeout(r, 1500));
+          await new Promise(r => setTimeout(r, 2000));
         }
       }
 
