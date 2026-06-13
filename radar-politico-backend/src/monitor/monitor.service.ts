@@ -68,7 +68,7 @@ export class MonitorService implements OnModuleInit {
 
         for (const noticia of noticias) {
           if (new Date(noticia.fecha) < hace24h) continue;
-          const key = 'enviada:' + Buffer.from(noticia.url).toString('base64').slice(0, 40);
+          const key = 'enviada:' + require('crypto').createHash('md5').update(noticia.url).digest('hex');
           const yaEnviada = await this.redis.get(key);
           if (yaEnviada) continue;
           await this.redis.set(key, '1', 'EX', 86400);
