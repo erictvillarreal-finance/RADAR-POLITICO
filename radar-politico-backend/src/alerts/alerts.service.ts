@@ -1,33 +1,72 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { Noticia } from '../scraper/scraper.service';
+
+const PALABRAS_NEGATIVAS = ['derrame','explosion','explosión','incendio','fuga','robo','huachicol','toma clandestina','contaminacion','contaminación','desabasto','accidente','muerte','muertos','heridos','sancion','sanción','multa','corrupcion','corrupción','fraude','demanda','denuncia','crisis','falla','fallo','colapso','bloqueo','protesta','manifestacion','manifestación'];
+const PALABRAS_POSITIVAS = ['inauguracion','inauguración','inversion','inversión','record','récord','acuerdo','convenio','logro','avance','crecimiento','produccion','producción','mejora','exito','éxito','nuevo contrato','ampliacion','ampliación'];
+
+function semaforo(texto: string): string {
+  const t = texto.toLowerCase();
+  if (PALABRAS_NEGATIVAS.some(p => t.includes(p))) return '🔴';
+  if (PALABRAS_POSITIVAS.some(p => t.includes(p))) return '🟢';
+  return '🟡';
+}
 
 @Injectable()
 export class AlertsService {
   private readonly logger = new Logger(AlertsService.name);
   private readonly botToken = process.env.TELEGRAM_BOT_TOKEN;
   private readonly chatId = process.env.TELEGRAM_CHAT_ID;
+  private readonly genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+
+  async generarBullets(noticia: Noticia): Promise<string> {
+    try {
+      const model = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+      const prompt = `Resume esta noticia en 2 bullets concisos en español. Solo los bullets, sin introducción, cada uno empieza con •
+
+Título: ${noticia.titulo}
+Descripción: ${noticia.resumen}`;
+      const result = await model.generateContent(prompt);
+      return result.response.text().trim();
+    } catch (error) {
+      this.logger.error('Error Gemini', error.message);
+      return '• ' + (noticia.resumen || 'Sin descripción');
+    }
+  }
 
   async enviarAlerta(noticia: Noticia): Promise<void> {
-    const mensaje = `🚨 *RADAR POLÍTICO MX*\n\n📰 *${noticia.titulo}*\n\n📡 Fuente: ${noticia.fuente}\n📅 ${new Date(noticia.fecha).toLocaleString('es-MX')}\n\n🔗 [Ver nota](${noticia.url})`;
+    const icono = semaforo(noticia.titulo + ' ' + noticia.resumen);
+    const bullets = await this.generarBullets(noticia);
+    const mensaje = `${icono} *${noticia.titulo}* | ${noticia.fuente}
+${bullets}
+🔗 ${noticia.url}`;
+
     try {
       await axios.post(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
         chat_id: this.chatId,
         text: mensaje,
         parse_mode: 'Markdown',
-        disable_web_page_preview: false,
+        disable_web_page_preview: true,
       });
-      this.logger.log(`Alerta enviada: ${noticia.titulo.substring(0, 50)}`);
+      this.logger.log('Alerta enviada: ' + noticia.titulo.substring(0, 50));
     } catch (error) {
       this.logger.error('Error enviando alerta Telegram', error.message);
     }
   }
 
   async enviarResumen(noticias: Noticia[], query: string): Promise<void> {
-    const header = `🔍 *MONITOREO: "${query}"*\n📊 ${noticias.length} noticias encontradas\n${'─'.repeat(30)}\n\n`;
+    const header = `🔍 *MONITOREO: "${query}"*
+📊 ${noticias.length} noticias encontradas
+${'─'.repeat(30)}
+
+`;
     const lista = noticias.slice(0, 5).map((n, i) =>
-      `${i + 1}. [${n.titulo.substring(0, 80)}](${n.url})\n   📡 ${n.fuente}`
-    ).join('\n\n');
+      `${i + 1}. [${n.titulo.substring(0, 80)}](${n.url})
+   📡 ${n.fuente}`
+    ).join('
+
+');
     const mensaje = header + lista;
     try {
       await axios.post(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
@@ -36,7 +75,6 @@ export class AlertsService {
         parse_mode: 'Markdown',
         disable_web_page_preview: true,
       });
-      this.logger.log(`Resumen enviado para query: ${query}`);
     } catch (error) {
       this.logger.error('Error enviando resumen Telegram', error.message);
     }
