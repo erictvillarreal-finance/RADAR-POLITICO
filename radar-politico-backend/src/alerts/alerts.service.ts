@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
+import * as cheerio from 'cheerio';
 import Groq from 'groq-sdk';
 import { Noticia } from '../scraper/scraper.service';
 
@@ -21,6 +22,37 @@ function escaparHTML(texto: string): string {
   return texto.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+async function resolverURL(googleUrl: string): Promise<string> {
+  try {
+    const response = await axios.get(googleUrl, {
+      maxRedirects: 5,
+      timeout: 8000,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+    });
+    return response.request.res.responseUrl || googleUrl;
+  } catch {
+    return googleUrl;
+  }
+}
+
+async function leerArticulo(url: string): Promise<string> {
+  try {
+    const { data } = await axios.get(url, {
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html',
+      },
+    });
+    const $ = cheerio.load(data);
+    $('script, style, nav, header, footer, aside, .ad, .publicidad, .related').remove();
+    const texto = $('article p, .content p, .nota p, .entry-content p, main p').map((_, el) => $(el).text()).get().join(' ').trim();
+    return texto.length > 200 ? texto.substring(0, 3000) : '';
+  } catch {
+    return '';
+  }
+}
+
 @Injectable()
 export class AlertsService {
   private readonly logger = new Logger(AlertsService.name);
@@ -28,30 +60,39 @@ export class AlertsService {
   private readonly chatId = process.env.TELEGRAM_CHAT_ID;
   private readonly groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-  async generarBullets(noticia: Noticia): Promise<string> {
+  async generarBullets(titulo: string, contenido: string): Promise<string> {
     try {
       const completion = await this.groq.chat.completions.create({
         model: 'llama-3.1-8b-instant',
         messages: [{
           role: 'user',
-          content: `Resume esta noticia en 2 bullets concisos en español. Solo los bullets, cada uno empieza con •\n\nTítulo: ${limpiar(noticia.titulo)}\nDescripción: ${limpiar(noticia.resumen)}`,
+          content: `Resume esta noticia en 2-3 bullets concisos en español. Solo los bullets, cada uno empieza con •\n\nTítulo: ${titulo}\nContenido: ${contenido}`,
         }],
-        max_tokens: 150,
+        max_tokens: 200,
         temperature: 0.3,
       });
       return escaparHTML(completion.choices[0]?.message?.content?.trim() || '');
     } catch (error) {
       this.logger.error('Error Groq: ' + error.message);
-      return '• ' + escaparHTML(limpiar(noticia.resumen || 'Sin descripción'));
+      return '';
     }
   }
 
   async enviarAlerta(noticia: Noticia): Promise<void> {
     const icono = semaforo(noticia.titulo + ' ' + noticia.resumen);
-    const titulo = escaparHTML(limpiar(noticia.titulo));
-    const fuente = escaparHTML(limpiar(noticia.fuente));
-    const bullets = await this.generarBullets(noticia);
-    const mensaje = `${icono} <b>${titulo}</b>\n<b>Fuente: ${fuente}</b>\n\n${bullets}\n\n🔗 <a href="${noticia.url}">Ver nota</a>`;
+    const titulo = limpiar(noticia.titulo);
+    const fuente = limpiar(noticia.fuente);
+
+    await new Promise(r => setTimeout(r, 10000));
+    const urlReal = await resolverURL(noticia.url);
+    const articulo = await leerArticulo(urlReal);
+
+    const contenido = articulo || limpiar(noticia.resumen);
+    const bullets = await this.generarBullets(titulo, contenido);
+    const bulletsFinal = bullets || '• ' + escaparHTML(limpiar(noticia.resumen || 'Sin descripción'));
+
+    const fechaFormato = new Date(noticia.fecha).toLocaleString("es-MX", {dateStyle:"short", timeStyle:"short"});
+    const mensaje = `${icono} <b>${escaparHTML(titulo)}</b>\n<b>Fuente: ${escaparHTML(fuente)}</b> | <i>${fechaFormato}</i>\n\n${bulletsFinal}\n\n🔗 <a href="${urlReal}">Ver nota</a>`;
 
     try {
       await axios.post(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
@@ -60,7 +101,7 @@ export class AlertsService {
         parse_mode: 'HTML',
         disable_web_page_preview: true,
       });
-      this.logger.log('Alerta enviada: ' + noticia.titulo.substring(0, 50));
+      this.logger.log('Alerta enviada: ' + titulo.substring(0, 50));
     } catch (error) {
       this.logger.error('Error enviando alerta Telegram: ' + error.message);
     }
