@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import Groq from 'groq-sdk';
 import { Noticia } from '../scraper/scraper.service';
 
 const PALABRAS_NEGATIVAS = ['derrame','explosion','explosión','incendio','fuga','robo','huachicol','toma clandestina','contaminacion','contaminación','desabasto','accidente','muerte','muertos','heridos','sancion','sanción','multa','corrupcion','corrupción','fraude','demanda','denuncia','crisis','falla','fallo','colapso','bloqueo','protesta','manifestacion','manifestación'];
@@ -21,38 +21,27 @@ function escaparHTML(texto: string): string {
   return texto.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-async function resolverURL(googleUrl: string): Promise<string> {
-  try {
-    const response = await axios.get(googleUrl, {
-      maxRedirects: 5,
-      timeout: 5000,
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-    });
-    return response.request.res.responseUrl || googleUrl;
-  } catch {
-    return googleUrl;
-  }
-}
-
 @Injectable()
 export class AlertsService {
   private readonly logger = new Logger(AlertsService.name);
   private readonly botToken = process.env.TELEGRAM_BOT_TOKEN;
   private readonly chatId = process.env.TELEGRAM_CHAT_ID;
-  private readonly genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+  private readonly groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
   async generarBullets(noticia: Noticia): Promise<string> {
     try {
-      const model = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash-8b' });
-      const titulo = limpiar(noticia.titulo);
-      const descripcion = limpiar(noticia.resumen);
-      const prompt = `Resume en máximo 1 bullet de 20 palabras en español. Solo el bullet comenzando con •\n\nTítulo: ${titulo}\nDescripción: ${descripcion}`;
-      await new Promise(r => setTimeout(r, 5000));
-      const result = await model.generateContent(prompt);
-      const texto = result.response.text().trim();
-      return escaparHTML(texto);
+      const completion = await this.groq.chat.completions.create({
+        model: 'llama-3.1-8b-instant',
+        messages: [{
+          role: 'user',
+          content: `Resume esta noticia en 2 bullets concisos en español. Solo los bullets, cada uno empieza con •\n\nTítulo: ${limpiar(noticia.titulo)}\nDescripción: ${limpiar(noticia.resumen)}`,
+        }],
+        max_tokens: 150,
+        temperature: 0.3,
+      });
+      return escaparHTML(completion.choices[0]?.message?.content?.trim() || '');
     } catch (error) {
-      this.logger.error('Error Gemini: ' + error.message);
+      this.logger.error('Error Groq: ' + error.message);
       return '• ' + escaparHTML(limpiar(noticia.resumen || 'Sin descripción'));
     }
   }
@@ -62,9 +51,7 @@ export class AlertsService {
     const titulo = escaparHTML(limpiar(noticia.titulo));
     const fuente = escaparHTML(limpiar(noticia.fuente));
     const bullets = await this.generarBullets(noticia);
-    const urlReal = await resolverURL(noticia.url);
-    
-    const mensaje = `${icono} <b>${titulo}</b>\n<b>Fuente: ${fuente}</b>\n\n${bullets}\n\n🔗 <a href="${urlReal}">Ver nota</a>`;
+    const mensaje = `${icono} <b>${titulo}</b>\n<b>Fuente: ${fuente}</b>\n\n${bullets}\n\n🔗 <a href="${noticia.url}">Ver nota</a>`;
 
     try {
       await axios.post(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
