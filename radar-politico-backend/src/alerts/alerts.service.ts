@@ -43,7 +43,7 @@ export class AlertsService {
 
   async generarBullets(noticia: Noticia): Promise<string> {
     try {
-      const model = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+      const model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
       const titulo = limpiar(noticia.titulo);
       const descripcion = limpiar(noticia.resumen);
       const prompt = `Resume esta noticia en 2-3 bullets concisos en español. Responde SOLO con los bullets, cada uno en una línea nueva comenzando con •\n\nTítulo: ${titulo}\nDescripción: ${descripcion}`;
