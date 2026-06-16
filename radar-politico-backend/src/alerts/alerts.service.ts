@@ -27,10 +27,7 @@ export class AlertsService {
   async generarBullets(noticia: Noticia): Promise<string> {
     try {
       const model = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-      const prompt = 'Resume esta noticia en 2 bullets concisos en español. Solo los bullets sin introducción, cada uno empieza con •
-
-Título: ' + noticia.titulo + '
-Descripción: ' + noticia.resumen;
+      const prompt = `Resume esta noticia en 2 bullets concisos en español. Solo los bullets sin introducción, cada uno empieza con •\n\nTítulo: ${noticia.titulo}\nDescripción: ${noticia.resumen}`;
       const result = await model.generateContent(prompt);
       return escapar(result.response.text().trim());
     } catch (error) {
@@ -42,12 +39,10 @@ Descripción: ' + noticia.resumen;
   async enviarAlerta(noticia: Noticia): Promise<void> {
     const icono = semaforo(noticia.titulo + ' ' + noticia.resumen);
     const bullets = await this.generarBullets(noticia);
-    const mensaje = icono + ' <b>' + escapar(noticia.titulo) + '</b> | ' + escapar(noticia.fuente) + '
-' + bullets + '
-🔗 ' + noticia.url;
+    const mensaje = `${icono} <b>${escapar(noticia.titulo)}</b> | ${escapar(noticia.fuente)}\n${bullets}\n🔗 ${noticia.url}`;
 
     try {
-      await axios.post('https://api.telegram.org/bot' + this.botToken + '/sendMessage', {
+      await axios.post(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
         chat_id: this.chatId,
         text: mensaje,
         parse_mode: 'HTML',
@@ -60,19 +55,12 @@ Descripción: ' + noticia.resumen;
   }
 
   async enviarResumen(noticias: Noticia[], query: string): Promise<void> {
-    const header = '🔍 <b>MONITOREO: "' + query + '"</b>
-📊 ' + noticias.length + ' noticias encontradas
-' + '─'.repeat(30) + '
-
-';
+    const header = `🔍 <b>MONITOREO: "${query}"</b>\n📊 ${noticias.length} noticias encontradas\n${'─'.repeat(30)}\n\n`;
     const lista = noticias.slice(0, 5).map((n, i) =>
-      (i + 1) + '. <a href="' + n.url + '">' + escapar(n.titulo.substring(0, 80)) + '</a>
-   📡 ' + escapar(n.fuente)
-    ).join('
-
-');
+      `${i + 1}. <a href="${n.url}">${escapar(n.titulo.substring(0, 80))}</a>\n   📡 ${escapar(n.fuente)}`
+    ).join('\n\n');
     try {
-      await axios.post('https://api.telegram.org/bot' + this.botToken + '/sendMessage', {
+      await axios.post(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
         chat_id: this.chatId,
         text: header + lista,
         parse_mode: 'HTML',
