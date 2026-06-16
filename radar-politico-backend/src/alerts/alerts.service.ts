@@ -13,8 +13,25 @@ function semaforo(texto: string): string {
   return '🟡';
 }
 
-function escapar(texto: string): string {
+function limpiar(texto: string): string {
+  return texto.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/<[^>]*>/g, '').trim();
+}
+
+function escaparHTML(texto: string): string {
   return texto.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+async function resolverURL(googleUrl: string): Promise<string> {
+  try {
+    const response = await axios.get(googleUrl, {
+      maxRedirects: 5,
+      timeout: 5000,
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+    });
+    return response.request.res.responseUrl || googleUrl;
+  } catch {
+    return googleUrl;
+  }
 }
 
 @Injectable()
@@ -27,19 +44,26 @@ export class AlertsService {
   async generarBullets(noticia: Noticia): Promise<string> {
     try {
       const model = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-      const prompt = `Resume esta noticia en 2 bullets concisos en español. Solo los bullets sin introducción, cada uno empieza con •\n\nTítulo: ${noticia.titulo}\nDescripción: ${noticia.resumen}`;
+      const titulo = limpiar(noticia.titulo);
+      const descripcion = limpiar(noticia.resumen);
+      const prompt = `Resume esta noticia en 2-3 bullets concisos en español. Responde SOLO con los bullets, cada uno en una línea nueva comenzando con •\n\nTítulo: ${titulo}\nDescripción: ${descripcion}`;
       const result = await model.generateContent(prompt);
-      return escapar(result.response.text().trim());
+      const texto = result.response.text().trim();
+      return escaparHTML(texto);
     } catch (error) {
       this.logger.error('Error Gemini: ' + error.message);
-      return '• ' + escapar(noticia.resumen || 'Sin descripción');
+      return '• ' + escaparHTML(limpiar(noticia.resumen || 'Sin descripción'));
     }
   }
 
   async enviarAlerta(noticia: Noticia): Promise<void> {
     const icono = semaforo(noticia.titulo + ' ' + noticia.resumen);
+    const titulo = escaparHTML(limpiar(noticia.titulo));
+    const fuente = escaparHTML(limpiar(noticia.fuente));
     const bullets = await this.generarBullets(noticia);
-    const mensaje = `${icono} <b>${escapar(noticia.titulo)}</b> | ${escapar(noticia.fuente)}\n${bullets}\n🔗 ${noticia.url}`;
+    const urlReal = await resolverURL(noticia.url);
+    
+    const mensaje = `${icono} <b>${titulo}</b>\n<b>Fuente: ${fuente}</b>\n\n${bullets}\n\n🔗 <a href="${urlReal}">Ver nota</a>`;
 
     try {
       await axios.post(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
@@ -57,7 +81,7 @@ export class AlertsService {
   async enviarResumen(noticias: Noticia[], query: string): Promise<void> {
     const header = `🔍 <b>MONITOREO: "${query}"</b>\n📊 ${noticias.length} noticias encontradas\n${'─'.repeat(30)}\n\n`;
     const lista = noticias.slice(0, 5).map((n, i) =>
-      `${i + 1}. <a href="${n.url}">${escapar(n.titulo.substring(0, 80))}</a>\n   📡 ${escapar(n.fuente)}`
+      `${i + 1}. <a href="${n.url}">${escaparHTML(limpiar(n.titulo.substring(0, 80)))}</a>\n   📡 ${escaparHTML(limpiar(n.fuente))}`
     ).join('\n\n');
     try {
       await axios.post(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
