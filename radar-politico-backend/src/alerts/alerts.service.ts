@@ -47,6 +47,7 @@ export class AlertsService {
       const titulo = limpiar(noticia.titulo);
       const descripcion = limpiar(noticia.resumen);
       const prompt = `Resume esta noticia en 2-3 bullets concisos en español. Responde SOLO con los bullets, cada uno en una línea nueva comenzando con •\n\nTítulo: ${titulo}\nDescripción: ${descripcion}`;
+      await new Promise(r => setTimeout(r, 5000));
       const result = await model.generateContent(prompt);
       const texto = result.response.text().trim();
       return escaparHTML(texto);
