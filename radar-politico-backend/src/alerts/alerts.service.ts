@@ -101,7 +101,7 @@ export class AlertsService {
     const bullets = await this.generarBullets(titulo, contenido);
     const bulletsFinal = bullets || '• ' + escaparHTML(limpiar(noticia.resumen || 'Sin descripción'));
 
-    const dominio = (() => { try { return new URL(urlReal).hostname.replace('www.',''); } catch { return urlReal; } })();
+    const dominio = (() => { try { const u = new URL(urlReal); const path = u.pathname.substring(0, 40).replace('/-$', ''); return u.hostname.replace('www.','') + path + '...'; } catch { return urlReal.substring(0, 50) + '...'; } })();
     const mensaje = `${icono} <b>${escaparHTML(titulo)}</b>\n<b>Fuente: ${escaparHTML(fuente)}</b> | <i>${fecha}</i>\n\n${bulletsFinal}\n\n🔗 <a href="${urlReal}">${escaparHTML(dominio)}</a>`;
 
     try {
