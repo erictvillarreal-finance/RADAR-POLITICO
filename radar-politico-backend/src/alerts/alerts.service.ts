@@ -22,6 +22,15 @@ function escaparHTML(texto: string): string {
   return texto.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+function formatearFecha(fechaISO: string): string {
+  const fecha = new Date(fechaISO);
+  return fecha.toLocaleString('es-MX', {
+    timeZone: 'America/Monterrey',
+    dateStyle: 'short',
+    timeStyle: 'short',
+  });
+}
+
 async function resolverURL(googleUrl: string): Promise<string> {
   try {
     const response = await axios.get(googleUrl, {
@@ -66,10 +75,10 @@ export class AlertsService {
         model: 'llama-3.1-8b-instant',
         messages: [{
           role: 'user',
-          content: `Resume esta noticia en 2-3 bullets concisos en español. Solo los bullets, cada uno empieza con •\n\nTítulo: ${titulo}\nContenido: ${contenido}`,
+          content: `Eres un analista de medios especializado en energía e hidrocarburos. Resume esta noticia en 3-4 bullets en español con tono profesional y formal. Cada bullet debe aportar información distinta y relevante. Solo los bullets, cada uno comienza con •\n\nTítulo: ${titulo}\nContenido: ${contenido}`,
         }],
-        max_tokens: 200,
-        temperature: 0.3,
+        max_tokens: 300,
+        temperature: 0.2,
       });
       return escaparHTML(completion.choices[0]?.message?.content?.trim() || '');
     } catch (error) {
@@ -82,6 +91,7 @@ export class AlertsService {
     const icono = semaforo(noticia.titulo + ' ' + noticia.resumen);
     const titulo = limpiar(noticia.titulo);
     const fuente = limpiar(noticia.fuente);
+    const fecha = formatearFecha(noticia.fecha);
 
     await new Promise(r => setTimeout(r, 10000));
     const urlReal = await resolverURL(noticia.url);
@@ -91,8 +101,8 @@ export class AlertsService {
     const bullets = await this.generarBullets(titulo, contenido);
     const bulletsFinal = bullets || '• ' + escaparHTML(limpiar(noticia.resumen || 'Sin descripción'));
 
-    const fechaFormato = new Date(noticia.fecha).toLocaleString("es-MX", {dateStyle:"short", timeStyle:"short"});
-    const mensaje = `${icono} <b>${escaparHTML(titulo)}</b>\n<b>Fuente: ${escaparHTML(fuente)}</b> | <i>${fechaFormato}</i>\n\n${bulletsFinal}\n\n🔗 <a href="${urlReal}">Ver nota</a>`;
+    const dominio = (() => { try { return new URL(urlReal).hostname.replace('www.',''); } catch { return urlReal; } })();
+    const mensaje = `${icono} <b>${escaparHTML(titulo)}</b>\n<b>Fuente: ${escaparHTML(fuente)}</b> | <i>${fecha}</i>\n\n${bulletsFinal}\n\n🔗 <a href="${urlReal}">${escaparHTML(dominio)}</a>`;
 
     try {
       await axios.post(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
