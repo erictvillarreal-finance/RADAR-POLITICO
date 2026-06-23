@@ -53,25 +53,6 @@ async function leerArticulo(url: string): Promise<string> {
   }
 }
 
-const SYSTEM_PROMPT = `Actúa como un sistema de inteligencia de medios especializado en extracción y estructuración de información, no en interpretación.
-Tu única función es tomar información explícita de la nota periodística y reorganizarla en formato estandarizado.
-
-REGLA FUNDAMENTAL:
-NO hagas análisis. NO infieras. NO interpretes. NO agregues contexto externo.
-SOLO reescribe información explícita del texto original de la nota, con el máximo detalle posible que el contenido permita.
-
-Genera exactamente 3 bullets. CADA BULLET DEBE TENER ENTRE 2 Y 3 ORACIONES COMPLETAS (no una sola oración corta), desarrollando con detalle el hecho, dato, cifra o declaración que describe. Usa todos los datos concretos disponibles en el contenido: nombres, cargos, cifras, lugares, fechas, declaraciones textuales.
-No se permite información que no esté presente en la fuente, pero SI debes aprovechar y desarrollar toda la información disponible, no resumirla en exceso.
-Cada bullet debe contener un hecho o ángulo distinto, sin repetición entre ellos.
-Mantén estilo de redacción institucional, claro y formal, como un boletín de inteligencia de medios.
-
-EJEMPLO DE NIVEL DE DETALLE ESPERADO:
-- Ingenieros petroleros egresados de instituciones en Tabasco han optado por emigrar a otras ciudades del país en busca de mejores oportunidades laborales. El fenómeno es reportado en el sector profesional del estado.
-- El secretario del Colegio de Ingenieros Petroleros de México, sección Villahermosa, informó que la organización agrupa a 300 profesionales del ramo en la región. Se mencionan procesos de formación continua entre los agremiados.
-- Se señala que Pemex aún ofrece espacios de nuevo ingreso, al igual que empresas privadas, principalmente en proyectos en tierra.
-
-RESPONDE UNICAMENTE CON LOS 3 BULLETS EN ESE NIVEL DE DETALLE, cada uno en su propia línea comenzando con •. Sin introducciones, sin saludos, sin texto adicional antes o después.`;
-
 @Injectable()
 export class AlertsService {
   private readonly logger = new Logger(AlertsService.name);
@@ -83,12 +64,12 @@ export class AlertsService {
     try {
       const completion = await this.groq.chat.completions.create({
         model: 'llama-3.1-8b-instant',
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: `Título: ${titulo}\nContenido de la nota: ${contenido}` },
-        ],
-        max_tokens: 500,
-        temperature: 0.1,
+        messages: [{
+          role: 'user',
+          content: `Resume la siguiente noticia en 3-4 bullets en español, tono profesional. RESPONDE UNICAMENTE CON LOS BULLETS, sin introducciones, sin saludos, sin texto antes o despues. Si la informacion es limitada, resume solo lo disponible sin inventar contexto. Cada bullet en su propia linea comenzando con •\n\nTitulo: ${titulo}\nContenido: ${contenido}`,
+        }],
+        max_tokens: 300,
+        temperature: 0.2,
       });
       return escaparHTML(completion.choices[0]?.message?.content?.trim() || '');
     } catch (error) {
