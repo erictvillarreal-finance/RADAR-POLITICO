@@ -2,10 +2,13 @@ import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import Groq from 'groq-sdk';
+import { GoogleDecoder } from 'google-news-url-decoder';
 import { Noticia } from '../scraper/scraper.service';
 
 const PALABRAS_NEGATIVAS = ['derrame','explosion','explosión','incendio','fuga','robo','huachicol','toma clandestina','contaminacion','contaminación','desabasto','accidente','muerte','muertos','heridos','sancion','sanción','multa','corrupcion','corrupción','fraude','demanda','denuncia','crisis','falla','fallo','colapso','bloqueo','protesta','manifestacion','manifestación'];
 const PALABRAS_POSITIVAS = ['inauguracion','inauguración','inversion','inversión','record','récord','acuerdo','convenio','logro','avance','crecimiento','produccion','producción','mejora','exito','éxito','nuevo contrato','ampliacion','ampliación'];
+
+const decoder = new GoogleDecoder();
 
 function semaforo(texto: string): string {
   const t = texto.toLowerCase();
@@ -22,17 +25,17 @@ function escaparHTML(texto: string): string {
   return texto.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-async function resolverURL(googleUrl: string): Promise<string> {
+async function resolverURL(googleUrl: string, logger: Logger): Promise<string> {
   try {
-    const response = await axios.get(googleUrl, {
-      maxRedirects: 5,
-      timeout: 8000,
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-    });
-    return response.request.res.responseUrl || googleUrl;
-  } catch {
-    return googleUrl;
+    const result = await decoder.decode(googleUrl);
+    if (result.status && result.decoded_url) {
+      return result.decoded_url;
+    }
+    logger.warn('Decoder fallo: ' + result.message);
+  } catch (error) {
+    logger.warn('Error decoder: ' + error.message);
   }
+  return googleUrl;
 }
 
 async function leerArticulo(url: string): Promise<string> {
@@ -99,7 +102,7 @@ Contenido: ${contenido}`,
     const fuente = limpiar(noticia.fuente);
 
     await new Promise(r => setTimeout(r, 10000));
-    const urlReal = await resolverURL(noticia.url);
+    const urlReal = await resolverURL(noticia.url, this.logger);
     const articulo = await leerArticulo(urlReal);
 
     const contenido = articulo || limpiar(noticia.resumen);
