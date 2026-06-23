@@ -53,6 +53,21 @@ async function leerArticulo(url: string): Promise<string> {
   }
 }
 
+const SYSTEM_PROMPT = `Actúa como un sistema de inteligencia de medios especializado en extracción y estructuración de información, no en interpretación.
+Tu única función es tomar información explícita de la nota periodística y reorganizarla en formato estandarizado.
+
+REGLA FUNDAMENTAL:
+NO hagas análisis. NO infieras. NO interpretes. NO agregues contexto externo.
+SOLO reescribe información explícita del texto original de la nota.
+
+Genera exactamente 3 bullets, cada uno con 2-3 líneas de narrativa que sea reescritura fiel del contenido de la nota.
+No se permite información que no esté presente en la fuente.
+Cada bullet debe contener un hecho distinto, sin repetición.
+Mantén estilo de redacción institucional clara.
+Máxima fidelidad al contenido original.
+
+RESPONDE UNICAMENTE CON LOS 3 BULLETS, cada uno en su propia línea comenzando con •. Sin introducciones, sin saludos, sin texto adicional antes o después.`;
+
 @Injectable()
 export class AlertsService {
   private readonly logger = new Logger(AlertsService.name);
@@ -64,12 +79,12 @@ export class AlertsService {
     try {
       const completion = await this.groq.chat.completions.create({
         model: 'llama-3.1-8b-instant',
-        messages: [{
-          role: 'user',
-          content: `Eres un analista de medios especializado en energía e hidrocarburos. Resume esta noticia en 3-4 bullets en español con tono profesional y formal. Cada bullet debe aportar información distinta y relevante. Solo los bullets, cada uno comienza con •\n\nTítulo: ${titulo}\nContenido: ${contenido}`,
-        }],
-        max_tokens: 300,
-        temperature: 0.2,
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: `Título: ${titulo}\nContenido de la nota: ${contenido}` },
+        ],
+        max_tokens: 350,
+        temperature: 0.1,
       });
       return escaparHTML(completion.choices[0]?.message?.content?.trim() || '');
     } catch (error) {
@@ -91,7 +106,7 @@ export class AlertsService {
     const bullets = await this.generarBullets(titulo, contenido);
     const bulletsFinal = bullets || '• ' + escaparHTML(limpiar(noticia.resumen || 'Sin descripción'));
 
-    const mensaje = `${icono} <b>${escaparHTML(titulo)}</b>  |  ${escaparHTML(fuente)} Digital\n\n${bulletsFinal}\n\n${urlReal}`;
+    const mensaje = `${icono} <b>${escaparHTML(titulo)}</b> | ${escaparHTML(fuente)} | Digital\n\n${bulletsFinal}\n\nURL: ${urlReal}`;
 
     try {
       await axios.post(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
