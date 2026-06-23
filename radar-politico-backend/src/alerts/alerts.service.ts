@@ -66,7 +66,22 @@ export class AlertsService {
         model: 'llama-3.1-8b-instant',
         messages: [{
           role: 'user',
-          content: `Resume la siguiente noticia en 3-4 bullets en español, tono profesional. RESPONDE UNICAMENTE CON LOS BULLETS, sin introducciones, sin saludos, sin texto antes o despues. Si la informacion es limitada, resume solo lo disponible sin inventar contexto. Cada bullet en su propia linea comenzando con •\n\nTitulo: ${titulo}\nContenido: ${contenido}`,
+          content: `Genera exactamente 3 bullets que resuman esta noticia. Cada bullet debe tener 2-3 lineas: Bullet 1 el hecho principal, Bullet 2 un dato complementario, Bullet 3 un segundo dato o declaracion relevante.
+
+REGLAS CRITICAS:
+- Solo informacion explicita del texto.
+- Prohibido inferir causas, consecuencias o tendencias.
+- Prohibido agregar contexto externo.
+- Prohibido editorializar o interpretar.
+- Mantener estilo de redaccion institucional clara.
+- Cada bullet debe ser independiente y no repetitivo.
+- Maxima fidelidad al contenido original.
+- Si la informacion es limitada, resume solo lo disponible sin inventar contexto.
+
+RESPONDE UNICAMENTE CON LOS 3 BULLETS, cada uno en su propia linea comenzando con •. Sin introducciones, sin saludos, sin texto antes o despues.
+
+Titulo: ${titulo}
+Contenido: ${contenido}`,
         }],
         max_tokens: 300,
         temperature: 0.2,
