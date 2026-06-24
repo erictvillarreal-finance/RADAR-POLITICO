@@ -10,22 +10,26 @@ const PALABRAS_POSITIVAS = ['inauguracion','inauguración','inversion','inversi�
 
 const decoder = new GoogleDecoder();
 
-function semaforo(texto: string): string {
+function semaforo(texto) {
   const t = texto.toLowerCase();
   if (PALABRAS_NEGATIVAS.some(p => t.includes(p))) return '🔴';
   if (PALABRAS_POSITIVAS.some(p => t.includes(p))) return '🟢';
   return '🟡';
 }
 
-function limpiar(texto: string): string {
+function limpiar(texto) {
   return texto.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/<[^>]*>/g, '').trim();
 }
 
-function escaparHTML(texto: string): string {
+function escaparHTML(texto) {
   return texto.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-async function resolverURL(googleUrl: string, logger: Logger): Promise<string> {
+function espaciarBullets(texto) {
+  return texto.split("\n").map(l => l.trim()).filter(l => l.length > 0).join("\n\n");
+}
+
+async function resolverURL(googleUrl, logger) {
   try {
     const result = await decoder.decode(googleUrl);
     if (result.status && result.decoded_url) {
@@ -38,7 +42,7 @@ async function resolverURL(googleUrl: string, logger: Logger): Promise<string> {
   return googleUrl;
 }
 
-async function leerArticulo(url: string): Promise<string> {
+async function leerArticulo(url) {
   try {
     const { data } = await axios.get(url, {
       timeout: 10000,
@@ -47,56 +51,46 @@ async function leerArticulo(url: string): Promise<string> {
         'Accept': 'text/html',
       },
     });
-    const $ = cheerio.load(data);
-    $('script, style, nav, header, footer, aside, .ad, .publicidad, .related').remove();
-    const texto = $('article p, .content p, .nota p, .entry-content p, main p').map((_, el) => $(el).text()).get().join(' ').trim();
+    const dollarSign = cheerio.load(data);
+    dollarSign('script, style, nav, header, footer, aside, .ad, .publicidad, .related').remove();
+    const texto = dollarSign('article p, .content p, .nota p, .entry-content p, main p').map((_, el) => dollarSign(el).text()).get().join(' ').trim();
     return texto.length > 200 ? texto.substring(0, 3000) : '';
   } catch {
     return '';
   }
 }
 
-@Injectable()
-export class AlertsService {
-  private readonly logger = new Logger(AlertsService.name);
-  private readonly botToken = process.env.TELEGRAM_BOT_TOKEN;
-  private readonly chatId = process.env.TELEGRAM_CHAT_ID;
-  private readonly groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+class AlertsServiceClass {
+  logger;
+  botToken;
+  chatId;
+  groq;
+  constructor() {
+    this.logger = new Logger('AlertsService');
+    this.botToken = process.env.TELEGRAM_BOT_TOKEN;
+    this.chatId = process.env.TELEGRAM_CHAT_ID;
+    this.groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+  }
 
-  async generarBullets(titulo: string, contenido: string): Promise<string> {
+  async generarBullets(titulo, contenido) {
     try {
+      const prompt = 'Genera exactamente 3 bullets que resuman esta noticia. Cada bullet debe tener 2-3 lineas: Bullet 1 el hecho principal, Bullet 2 un dato complementario, Bullet 3 un segundo dato o declaracion relevante.\n\nREGLAS CRITICAS:\n- Solo informacion explicita del texto.\n- Prohibido inferir causas, consecuencias o tendencias.\n- Prohibido agregar contexto externo.\n- Prohibido editorializar o interpretar.\n- Mantener estilo de redaccion institucional clara.\n- Cada bullet debe ser independiente y no repetitivo.\n- Maxima fidelidad al contenido original.\n- Si la informacion es limitada, resume solo lo disponible sin inventar contexto.\n\nRESPONDE UNICAMENTE CON LOS 3 BULLETS, cada uno en su propia linea comenzando con el caracter bullet point. Sin introducciones, sin saludos, sin texto antes o despues.\n\nTitulo: ' + titulo + '\nContenido: ' + contenido;
+
       const completion = await this.groq.chat.completions.create({
         model: 'llama-3.1-8b-instant',
-        messages: [{
-          role: 'user',
-          content: `Genera exactamente 3 bullets que resuman esta noticia. Cada bullet debe tener 2-3 lineas: Bullet 1 el hecho principal, Bullet 2 un dato complementario, Bullet 3 un segundo dato o declaracion relevante.
-
-REGLAS CRITICAS:
-- Solo informacion explicita del texto.
-- Prohibido inferir causas, consecuencias o tendencias.
-- Prohibido agregar contexto externo.
-- Prohibido editorializar o interpretar.
-- Mantener estilo de redaccion institucional clara.
-- Cada bullet debe ser independiente y no repetitivo.
-- Maxima fidelidad al contenido original.
-- Si la informacion es limitada, resume solo lo disponible sin inventar contexto.
-
-RESPONDE UNICAMENTE CON LOS 3 BULLETS, cada uno en su propia linea comenzando con •. Sin introducciones, sin saludos, sin texto antes o despues.
-
-Titulo: ${titulo}
-Contenido: ${contenido}`,
-        }],
+        messages: [{ role: 'user', content: prompt }],
         max_tokens: 300,
         temperature: 0.2,
       });
-      return escaparHTML(completion.choices[0]?.message?.content?.trim() || '');
+      const texto = completion.choices[0] && completion.choices[0].message ? completion.choices[0].message.content : '';
+      return escaparHTML((texto || '').trim());
     } catch (error) {
       this.logger.error('Error Groq: ' + error.message);
       return '';
     }
   }
 
-  async enviarAlerta(noticia: Noticia): Promise<void> {
+  async enviarAlerta(noticia) {
     const icono = semaforo(noticia.titulo + ' ' + noticia.resumen);
     const titulo = limpiar(noticia.titulo);
     const fuente = limpiar(noticia.fuente);
@@ -107,12 +101,13 @@ Contenido: ${contenido}`,
 
     const contenido = articulo || limpiar(noticia.resumen);
     const bullets = await this.generarBullets(titulo, contenido);
-    const bulletsFinal = bullets || '• ' + escaparHTML(limpiar(noticia.resumen || 'Sin descripción'));
+    const bulletsFinal = bullets || ('punto ' + escaparHTML(limpiar(noticia.resumen || 'Sin descripcion')));
+    const bulletsConEspacio = espaciarBullets(bulletsFinal);
 
-    const mensaje = `${icono} <b>${escaparHTML(titulo)}</b> | ${escaparHTML(fuente)} | Digital\n\n${bulletsFinal}\n\nURL: ${urlReal}`;
+    const mensaje = icono + ' <b>' + escaparHTML(titulo) + '</b> ' + escaparHTML(fuente) + ' digital\n\n' + bulletsConEspacio + '\n\nURL: ' + urlReal;
 
     try {
-      await axios.post(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
+      await axios.post('https://api.telegram.org/bot' + this.botToken + '/sendMessage', {
         chat_id: this.chatId,
         text: mensaje,
         parse_mode: 'HTML',
@@ -124,13 +119,13 @@ Contenido: ${contenido}`,
     }
   }
 
-  async enviarResumen(noticias: Noticia[], query: string): Promise<void> {
-    const header = `🔍 <b>MONITOREO: "${query}"</b>\n📊 ${noticias.length} noticias encontradas\n${'─'.repeat(30)}\n\n`;
+  async enviarResumen(noticias, query) {
+    const header = '🔍 <b>MONITOREO: "' + query + '"</b>\n📊 ' + noticias.length + ' noticias encontradas\n' + '─'.repeat(30) + '\n\n';
     const lista = noticias.slice(0, 5).map((n, i) =>
-      `${i + 1}. <a href="${n.url}">${escaparHTML(limpiar(n.titulo.substring(0, 80)))}</a>\n   📡 ${escaparHTML(limpiar(n.fuente))}`
+      (i + 1) + '. <a href="' + n.url + '">' + escaparHTML(limpiar(n.titulo.substring(0, 80))) + '</a>\n   📡 ' + escaparHTML(limpiar(n.fuente))
     ).join('\n\n');
     try {
-      await axios.post(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
+      await axios.post('https://api.telegram.org/bot' + this.botToken + '/sendMessage', {
         chat_id: this.chatId,
         text: header + lista,
         parse_mode: 'HTML',
@@ -141,3 +136,6 @@ Contenido: ${contenido}`,
     }
   }
 }
+
+@Injectable()
+export class AlertsService extends AlertsServiceClass {}
