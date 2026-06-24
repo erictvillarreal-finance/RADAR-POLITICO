@@ -104,7 +104,7 @@ class AlertsServiceClass {
     const bulletsFinal = bullets || ('punto ' + escaparHTML(limpiar(noticia.resumen || 'Sin descripcion')));
     const bulletsConEspacio = espaciarBullets(bulletsFinal);
 
-    const mensaje = icono + ' <b>' + escaparHTML(titulo) + '</b> ' + escaparHTML(fuente) + ' digital\n\n' + bulletsConEspacio + '\n\nURL: ' + urlReal;
+    const mensaje = icono + ' <b>' + escaparHTML(titulo) + '</b> digital\n\n' + bulletsConEspacio + '\n\nURL: ' + urlReal;
 
     try {
       await axios.post('https://api.telegram.org/bot' + this.botToken + '/sendMessage', {
