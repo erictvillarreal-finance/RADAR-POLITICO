@@ -58,7 +58,7 @@ class AlertsServiceClass {
       const prompt = 'MONITOREO DE PRENSA PEMEX\n\nAnaliza la nota proporcionada y entrega el resultado UNICAMENTE en este formato exacto, sin texto adicional antes ni despues:\n\n[SEMAFORO] Titulo textual de la nota | ' + fuente + ' | Digital\n* Fragmento textual 1 de la nota.\n* Fragmento textual 2 de la nota.\n* Fragmento textual 3 de la nota.\n' + urlReal + '\n\nSEMAFORO: Clasifica con emoji al inicio:\n- Verde 🟢: nota favorable para Pemex (avances, inversiones, logros, beneficios)\n- Amarillo 🟡: nota neutral/informativa, sin valoracion clara de Pemex\n- Rojo 🔴: nota desfavorable (accidentes, fugas, derrames, fallas, deudas, sanciones, denuncias)\n\nBULLETS: Exactamente 3 bullets. Deben ser fragmentos TEXTUALES de la nota, copiados literalmente sin resumir ni parafrasear. Selecciona los mas relevantes sobre Pemex.\n\nRESTRICCIONES:\n- No parafrasear ni resumir.\n- No inventar informacion.\n- No agregar contexto externo.\n- No agregar analisis ni conclusiones.\n- No agregar texto antes del semaforo ni despues de la liga.\n- Exactamente 3 bullets textuales.\n\nNOTA:\nTitulo: ' + titulo + '\nContenido: ' + contenido;
 
       const completion = await this.groq.chat.completions.create({
-        model: 'llama3-8b-8192',
+        model: 'qwen/qwen3.8-27b',
         messages: [{ role: 'user', content: prompt }],
         max_tokens: 500,
         temperature: 0.1,
