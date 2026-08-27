@@ -80,7 +80,7 @@ class AlertsServiceClass {
     const articulo = await leerArticulo(urlReal);
     const contenido = articulo || limpiar(noticia.resumen);
 
-    const mensajeGroq = await this.generarMensaje(titulo, fuente, urlReal, contenido);
+    const mensajeGroq = (await this.generarMensaje(titulo, fuente, urlReal, contenido) || "").replace(/[VERDE]/g, "🟢").replace(/[AMARILLO]/g, "🟡").replace(/[ROJO]/g, "🔴").replace(/Verde:/g, "🟢").replace(/Amarillo:/g, "🟡").replace(/Rojo:/g, "🔴").trim();
     const mensaje = mensajeGroq || ('🟡 ' + titulo + ' | ' + fuente + ' | Digital\n• ' + limpiar(noticia.resumen || 'Sin descripcion') + '\n' + urlReal);
 
     try {
