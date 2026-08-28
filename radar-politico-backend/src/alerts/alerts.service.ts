@@ -49,32 +49,68 @@ async function leerArticulo(url: string): Promise<string> {
   }
 }
 
+
+function escaparTelegramHtml(texto: string): string {
+  return texto
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function resaltarPemex(texto: string): string {
+  const escapado = escaparTelegramHtml(texto);
+  return escapado.replace(/\bPemex\b/gi, match => `<b>${match}</b>`);
+}
+
 const SYSTEM_PROMPT = `MONITOREO DE PRENSA PEMEX
 
-Analiza la nota proporcionada y entrega el resultado ÚNICAMENTE en este formato exacto, sin ningún texto adicional antes ni después:
+Analiza ÚNICAMENTE el contenido de la nota proporcionada.
 
-🟢/🟡/🔴 Título textual de la nota | Nombre del medio | Digital
-- Fragmento textual 1 de la nota.
-- Fragmento textual 2 de la nota.
-- Fragmento textual 3 de la nota.
-URL
+Tu tarea es devolver exclusivamente un objeto JSON válido con esta estructura:
 
-SEMÁFORO - Clasifica con UN SOLO emoji al inicio:
-🟢 Positiva: nota favorable para Pemex (avances, inversiones, logros, beneficios).
-🟡 Neutral: nota informativa sin valoración clara de Pemex.
-🔴 Negativa: nota desfavorable (accidentes, fugas, derrames, fallas, deudas, sanciones, denuncias, irregularidades).
+{
+  "semaforo": "🟢",
+  "fragmentos": [
+    "Fragmento textual 1",
+    "Fragmento textual 2",
+    "Fragmento textual 3"
+  ]
+}
 
-TÍTULO: Copia el título exactamente como aparece. No lo modifiques.
+REGLAS DEL SEMÁFORO:
+- 🟢 = Positiva: nota favorable para Pemex, incluyendo avances, inversiones, logros o beneficios.
+- 🟡 = Neutral: nota informativa sin valoración claramente favorable o desfavorable para Pemex.
+- 🔴 = Negativa: nota desfavorable para Pemex, incluyendo accidentes, fugas, derrames, fallas, deudas, sanciones, denuncias o irregularidades.
 
-BULLETS: Exactamente 3 bullets. Deben ser fragmentos textuales copiados literalmente de la nota, sin resumir ni parafrasear. Si el contenido disponible es limitado, usa lo que haya sin inventar.
+REGLAS DE LOS FRAGMENTOS:
+- Debes devolver EXACTAMENTE 3 fragmentos.
+- Cada fragmento debe ser COPIADO LITERALMENTE del contenido proporcionado.
+- NO resumas.
+- NO parafrasees.
+- NO cambies palabras.
+- NO combines partes de diferentes frases.
+- NO inventes texto.
+- Selecciona fragmentos que representen claramente la información principal de la nota.
+- Cada fragmento debe poder encontrarse literalmente dentro del contenido proporcionado.
+- No incluyas comillas alrededor de los fragmentos.
+- No incluyas bullets, guiones ni emojis dentro de los fragmentos.
 
 RESTRICCIONES ABSOLUTAS:
-- No agregues texto antes del emoji semáforo.
-- No agregues texto después de la URL.
-- No parafrasees ni resumas.
-- No inventes información.
-- No agregues análisis ni conclusiones.
-- Exactamente 3 bullets con •`;
+- Devuelve SOLO JSON válido.
+- No uses markdown.
+- No uses bloques de código.
+- No agregues explicaciones.
+- No agregues título.
+- No agregues medio.
+- No agregues URL.
+- No agregues ningún campo adicional.
+- "semaforo" debe ser exactamente uno de: 🟢, 🟡, 🔴.
+- "fragmentos" debe contener exactamente 3 elementos.
+
+IMPORTANTE:
+El backend verificará que los 3 fragmentos existan literalmente dentro del contenido de la nota.`;
+
 
 @Injectable()
 export class AlertsService {
@@ -83,21 +119,83 @@ export class AlertsService {
   private readonly chatId = process.env.TELEGRAM_CHAT_ID;
   private readonly genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
-  async generarMensaje(titulo: string, fuente: string, urlReal: string, contenido: string): Promise<string> {
+  async generarMensaje(
+    titulo: string,
+    fuente: string,
+    urlReal: string,
+    contenido: string,
+  ): Promise<string> {
     try {
       const model = this.genAI.getGenerativeModel({
         model: 'gemini-3.6-flash',
         systemInstruction: SYSTEM_PROMPT,
+        generationConfig: {
+          responseMimeType: 'application/json',
+        },
       });
 
-      const userPrompt = `Título: ${titulo}
+      const userPrompt = `Título de la nota: ${titulo}
 Medio: ${fuente}
 URL: ${urlReal}
-Contenido de la nota:
-${contenido || 'Sin contenido disponible - usa solo el título.'}`;
+
+CONTENIDO COMPLETO DE LA NOTA:
+${contenido || 'Sin contenido disponible.'}`;
 
       const result = await model.generateContent(userPrompt);
-      return result.response.text().trim();
+      const raw = result.response.text().trim();
+
+      this.logger.log('===== GEMINI RAW JSON =====');
+      this.logger.log(raw);
+      this.logger.log('===== FIN GEMINI RAW JSON =====');
+
+      let parsed: any;
+
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        this.logger.error('Gemini devolvió JSON inválido');
+        return '';
+      }
+
+      if (
+        !parsed ||
+        !['🟢', '🟡', '🔴'].includes(parsed.semaforo) ||
+        !Array.isArray(parsed.fragmentos) ||
+        parsed.fragmentos.length !== 3
+      ) {
+        this.logger.error('Gemini devolvió una estructura inválida');
+        return '';
+      }
+
+      const fragmentos = parsed.fragmentos
+        .map((fragmento: unknown) =>
+          typeof fragmento === 'string' ? fragmento.trim() : '',
+        )
+        .filter(Boolean);
+
+      if (fragmentos.length !== 3) {
+        this.logger.error('No hay exactamente 3 fragmentos válidos');
+        return '';
+      }
+
+      // Validación crítica:
+      // cada fragmento DEBE existir literalmente en el artículo.
+      for (const fragmento of fragmentos) {
+        if (!contenido.includes(fragmento)) {
+          this.logger.error(
+            'Gemini intentó parafrasear o inventar un fragmento: ' +
+              fragmento.substring(0, 200),
+          );
+          return '';
+        }
+      }
+
+      const tituloTelegram = resaltarPemex(titulo);
+      const fragmentosTelegram = fragmentos
+        .map(fragmento => `• ${resaltarPemex(fragmento)}`)
+        .join('\n');
+
+      return `${parsed.semaforo} ${tituloTelegram} | ${escaparTelegramHtml(fuente)} | Digital\n\n${fragmentosTelegram}\n\n${urlReal}`;
     } catch (error) {
       this.logger.error('Error Gemini: ' + error.message);
       return '';
@@ -134,6 +232,7 @@ ${contenido || 'Sin contenido disponible - usa solo el título.'}`;
       await axios.post(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
         chat_id: this.chatId,
         text: mensaje,
+        parse_mode: 'HTML',
         disable_web_page_preview: false,
       });
       this.logger.log('Alerta enviada: ' + titulo.substring(0, 60));
