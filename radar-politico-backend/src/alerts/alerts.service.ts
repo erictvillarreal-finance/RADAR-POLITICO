@@ -1,116 +1,146 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
-import Groq from 'groq-sdk';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { GoogleDecoder } from 'google-news-url-decoder';
 import { Noticia } from '../scraper/scraper.service';
 
 const decoder = new GoogleDecoder();
 
-function limpiar(texto) {
-  return texto.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/<[^>]*>/g, '').trim();
+function limpiar(texto: string): string {
+  return texto
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/<[^>]*>/g, '')
+    .trim();
 }
 
-async function resolverURL(googleUrl, logger) {
+async function resolverURL(googleUrl: string, logger: Logger): Promise<string> {
   try {
     const result = await decoder.decode(googleUrl);
     if (result.status && result.decoded_url) return result.decoded_url;
-    logger.warn('Decoder fallo: ' + result.message);
-  } catch (error) {
-    logger.warn('Error decoder: ' + error.message);
+  } catch (e) {
+    logger.warn('Decoder fallo: ' + e.message);
   }
   return googleUrl;
 }
 
-async function leerArticulo(url) {
+async function leerArticulo(url: string): Promise<string> {
   try {
     const { data } = await axios.get(url, {
       timeout: 10000,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
         'Accept': 'text/html',
       },
     });
     const $ = cheerio.load(data);
-    $('script, style, nav, header, footer, aside, .ad, .publicidad, .related').remove();
-    const texto = $('article p, .content p, .nota p, .entry-content p, main p').map((_, el) => $(el).text()).get().join(' ').trim();
-    return texto.length > 200 ? texto.substring(0, 3000) : '';
+    $('script, style, nav, header, footer, aside').remove();
+    const texto = $('article p, .content p, .nota p, .entry-content p, main p')
+      .map((_, el) => $(el).text())
+      .get()
+      .join(' ')
+      .trim();
+    return texto.length > 200 ? texto.substring(0, 4000) : '';
   } catch {
     return '';
   }
 }
 
-class AlertsServiceClass {
-  logger;
-  botToken;
-  chatId;
-  groq;
+const SYSTEM_PROMPT = `MONITOREO DE PRENSA PEMEX
 
-  constructor() {
-    this.logger = new Logger('AlertsService');
-    this.botToken = process.env.TELEGRAM_BOT_TOKEN;
-    this.chatId = process.env.TELEGRAM_CHAT_ID;
-    this.groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-  }
+Analiza la nota proporcionada y entrega el resultado ÚNICAMENTE en este formato exacto, sin ningún texto adicional antes ni después:
 
-  async generarMensaje(titulo, fuente, urlReal, contenido) {
+🟢/🟡/🔴 Título textual de la nota | Nombre del medio | Digital
+- Fragmento textual 1 de la nota.
+- Fragmento textual 2 de la nota.
+- Fragmento textual 3 de la nota.
+URL
+
+SEMÁFORO - Clasifica con UN SOLO emoji al inicio:
+🟢 Positiva: nota favorable para Pemex (avances, inversiones, logros, beneficios).
+🟡 Neutral: nota informativa sin valoración clara de Pemex.
+🔴 Negativa: nota desfavorable (accidentes, fugas, derrames, fallas, deudas, sanciones, denuncias, irregularidades).
+
+TÍTULO: Copia el título exactamente como aparece. No lo modifiques.
+
+BULLETS: Exactamente 3 bullets. Deben ser fragmentos textuales copiados literalmente de la nota, sin resumir ni parafrasear. Si el contenido disponible es limitado, usa lo que haya sin inventar.
+
+RESTRICCIONES ABSOLUTAS:
+- No agregues texto antes del emoji semáforo.
+- No agregues texto después de la URL.
+- No parafrasees ni resumas.
+- No inventes información.
+- No agregues análisis ni conclusiones.
+- Exactamente 3 bullets con •`;
+
+@Injectable()
+export class AlertsService {
+  private readonly logger = new Logger(AlertsService.name);
+  private readonly botToken = process.env.TELEGRAM_BOT_TOKEN;
+  private readonly chatId = process.env.TELEGRAM_CHAT_ID;
+  private readonly genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+
+  async generarMensaje(titulo: string, fuente: string, urlReal: string, contenido: string): Promise<string> {
     try {
-      const prompt = 'MONITOREO DE PRENSA PEMEX\n\nAnaliza la nota y entrega UNICAMENTE esto, sin texto adicional:\n\n[SEMAFORO] Titulo textual de la nota | ' + fuente + ' | Digital\n* Fragmento 1\n* Fragmento 2\n* Fragmento 3\n' + urlReal + '\n\nSEMAFORO:\n- Verde: nota favorable para Pemex\n- Amarillo: nota neutral\n- Rojo: nota desfavorable (accidentes, fugas, derrames, fallas, deudas, sanciones)\n\nBULLETS: Si tienes contenido suficiente, copia 3 fragmentos textuales distintos de la nota. Si el contenido es limitado (solo titulo o descripcion corta), genera 1 bullet con lo disponible y deja los otros 2 vacios o con guion. NUNCA repitas el mismo texto en varios bullets. NUNCA inventes informacion.\n\nNOTA:\nTitulo: ' + titulo + '\nContenido: ' + contenido;
-
-      const completion = await this.groq.chat.completions.create({
-        model: 'qwen/qwen3.8-27b',
-        messages: [{ role: 'user', content: prompt }],
-        max_tokens: 500,
-        temperature: 0.1,
+      const model = this.genAI.getGenerativeModel({
+        model: 'gemini-2.0-flash',
+        systemInstruction: SYSTEM_PROMPT,
       });
-      const texto = completion.choices[0] && completion.choices[0].message ? completion.choices[0].message.content : '';
-      return (texto || '').trim();
+
+      const userPrompt = `Título: ${titulo}
+Medio: ${fuente}
+URL: ${urlReal}
+Contenido de la nota:
+${contenido || 'Sin contenido disponible - usa solo el título.'}`;
+
+      const result = await model.generateContent(userPrompt);
+      return result.response.text().trim();
     } catch (error) {
-      this.logger.error('Error Groq: ' + error.message);
+      this.logger.error('Error Gemini: ' + error.message);
       return '';
     }
   }
 
-  async enviarAlerta(noticia) {
+  async enviarAlerta(noticia: Noticia): Promise<void> {
     const titulo = limpiar(noticia.titulo);
     const fuente = limpiar(noticia.fuente);
 
-    await new Promise(r => setTimeout(r, 10000));
+    await new Promise(r => setTimeout(r, 8000));
     const urlReal = await resolverURL(noticia.url, this.logger);
     const articulo = await leerArticulo(urlReal);
-    const contenido = articulo || limpiar(noticia.resumen);
+    const contenido = articulo || limpiar(noticia.resumen || '');
 
-    const mensajeGroq = (await this.generarMensaje(titulo, fuente, urlReal, contenido) || "").replace(/[VERDE]/g, "🟢").replace(/[AMARILLO]/g, "🟡").replace(/[ROJO]/g, "🔴").replace(/Verde:/g, "🟢").replace(/Amarillo:/g, "🟡").replace(/Rojo:/g, "🔴").trim();
-    const mensaje = mensajeGroq || ('🟡 ' + titulo + ' | ' + fuente + ' | Digital\n• ' + limpiar(noticia.resumen || 'Sin descripcion') + '\n' + urlReal);
+    const mensajeIA = await this.generarMensaje(titulo, fuente, urlReal, contenido);
+    const mensaje = mensajeIA || `🟡 ${titulo} | ${fuente} | Digital\n• ${limpiar(noticia.resumen || 'Sin descripción')}\n${urlReal}`;
 
     try {
-      await axios.post('https://api.telegram.org/bot' + this.botToken + '/sendMessage', {
+      await axios.post(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
         chat_id: this.chatId,
         text: mensaje,
         disable_web_page_preview: false,
       });
-      this.logger.log('Alerta enviada: ' + titulo.substring(0, 50));
+      this.logger.log('Alerta enviada: ' + titulo.substring(0, 60));
     } catch (error) {
-      this.logger.error('Error enviando alerta Telegram: ' + error.message);
+      this.logger.error('Error Telegram: ' + error.message);
     }
   }
 
-  async enviarResumen(noticias, query) {
-    const header = 'MONITOREO: "' + query + '"\n' + noticias.length + ' noticias encontradas\n\n';
-    const lista = noticias.slice(0, 5).map((n, i) =>
-      (i + 1) + '. ' + limpiar(n.titulo.substring(0, 80)) + '\n   ' + limpiar(n.fuente) + '\n   ' + n.url
-    ).join('\n\n');
+  async enviarResumen(noticias: Noticia[], query: string): Promise<void> {
+    const texto = `MONITOREO: "${query}"\n${noticias.length} noticias encontradas\n\n` +
+      noticias.slice(0, 5).map((n, i) =>
+        `${i + 1}. ${limpiar(n.titulo.substring(0, 80))}\n   ${limpiar(n.fuente)}\n   ${n.url}`
+      ).join('\n\n');
     try {
-      await axios.post('https://api.telegram.org/bot' + this.botToken + '/sendMessage', {
+      await axios.post(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
         chat_id: this.chatId,
-        text: header + lista,
+        text: texto,
         disable_web_page_preview: true,
       });
     } catch (error) {
-      this.logger.error('Error enviando resumen: ' + error.message);
+      this.logger.error('Error resumen Telegram: ' + error.message);
     }
   }
 }
-
-@Injectable()
-export class AlertsService extends AlertsServiceClass {}
