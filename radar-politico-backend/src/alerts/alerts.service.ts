@@ -27,28 +27,210 @@ async function resolverURL(googleUrl: string, logger: Logger): Promise<string> {
   return googleUrl;
 }
 
-async function leerArticulo(url: string): Promise<string> {
+async function leerArticulo(
+  url: string,
+  logger?: Logger,
+): Promise<string> {
   try {
     const { data } = await axios.get(url, {
-      timeout: 10000,
+      timeout: 15000,
+      maxRedirects: 5,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-        'Accept': 'text/html',
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        Accept:
+          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'es-MX,es;q=0.9,en;q=0.8',
       },
+      validateStatus: status => status >= 200 && status < 400,
     });
+
     const $ = cheerio.load(data);
-    $('script, style, nav, header, footer, aside').remove();
-    const texto = $('article p, .content p, .nota p, .entry-content p, main p')
+
+    const limpiarTexto = (texto: string): string => {
+      return texto
+        .replace(/\u00a0/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    };
+
+    const limpiarFragmentos = (fragmentos: string[]): string => {
+      const vistos = new Set<string>();
+
+      return fragmentos
+        .map(limpiarTexto)
+        .filter(texto => texto.length >= 40)
+        .filter(texto => {
+          const key = texto.toLowerCase();
+
+          if (vistos.has(key)) return false;
+
+          vistos.add(key);
+          return true;
+        })
+        .join(' ')
+        .trim();
+    };
+
+    // --------------------------------------------------------
+    // MÉTODO 1 — JSON-LD articleBody
+    // Muy importante para Excélsior y otros publishers.
+    // --------------------------------------------------------
+
+    const jsonLdBodies: string[] = [];
+
+    $('script[type="application/ld+json"]').each((_, el) => {
+      const raw = $(el).text().trim();
+
+      if (!raw) return;
+
+      try {
+        const parsed = JSON.parse(raw);
+
+        const items = Array.isArray(parsed)
+          ? parsed
+          : Array.isArray(parsed?.['@graph'])
+            ? parsed['@graph']
+            : [parsed];
+
+        for (const item of items) {
+          if (
+            item &&
+            typeof item === 'object' &&
+            typeof item.articleBody === 'string' &&
+            item.articleBody.length >= 300
+          ) {
+            jsonLdBodies.push(item.articleBody);
+          }
+        }
+      } catch {
+        // Algunos publishers tienen JSON-LD inválido.
+        // Continuamos con los demás métodos.
+      }
+    });
+
+    if (jsonLdBodies.length > 0) {
+      const body = limpiarFragmentos(jsonLdBodies);
+
+      if (body.length >= 300) {
+        const resultado = body.substring(0, 8000);
+
+        logger?.log(
+          `EXTRACTOR: JSON-LD articleBody | ${resultado.length} chars`,
+        );
+
+        return resultado;
+      }
+    }
+
+    // --------------------------------------------------------
+    // Remover elementos que NO forman parte del artículo.
+    // --------------------------------------------------------
+
+    $(
+      'script, style, noscript, nav, header, footer, aside, ' +
+      'form, iframe, svg, canvas, video, audio, ' +
+      '[aria-label*="share" i], ' +
+      '[class*="share" i], ' +
+      '[class*="social" i], ' +
+      '[class*="advert" i], ' +
+      '[class*="banner" i], ' +
+      '[class*="newsletter" i], ' +
+      '[class*="related" i], ' +
+      '[class*="recommended" i], ' +
+      '[class*="comment" i]'
+    ).remove();
+
+    // --------------------------------------------------------
+    // MÉTODO 2 — article p
+    // --------------------------------------------------------
+
+    const articleParagraphs = $('article p')
       .map((_, el) => $(el).text())
-      .get()
-      .join(' ')
-      .trim();
-    return texto.length > 200 ? texto.substring(0, 4000) : '';
-  } catch {
+      .get();
+
+    const articleText = limpiarFragmentos(articleParagraphs);
+
+    if (articleText.length >= 300) {
+      const resultado = articleText.substring(0, 8000);
+
+      logger?.log(
+        `EXTRACTOR: article p | ${resultado.length} chars`,
+      );
+
+      return resultado;
+    }
+
+    // --------------------------------------------------------
+    // MÉTODO 3 — itemprop articleBody
+    // --------------------------------------------------------
+
+    const itemPropParagraphs = $(
+      '[itemprop="articleBody"] p, [itemprop="articleBody"]',
+    )
+      .map((_, el) => $(el).text())
+      .get();
+
+    const itemPropText = limpiarFragmentos(itemPropParagraphs);
+
+    if (itemPropText.length >= 300) {
+      const resultado = itemPropText.substring(0, 8000);
+
+      logger?.log(
+        `EXTRACTOR: itemprop articleBody | ${resultado.length} chars`,
+      );
+
+      return resultado;
+    }
+
+    // --------------------------------------------------------
+    // MÉTODO 4 — Selectores editoriales conocidos
+    // --------------------------------------------------------
+
+    const selectors = [
+      '.article-body p',
+      '.article-content p',
+      '.post-content p',
+      '.entry-content p',
+      '.story-body p',
+      '.story-content p',
+      '.nota p',
+      '.contenido-nota p',
+      '.content p',
+      'main p',
+    ];
+
+    for (const selector of selectors) {
+      const paragraphs = $(selector)
+        .map((_, el) => $(el).text())
+        .get();
+
+      const text = limpiarFragmentos(paragraphs);
+
+      if (text.length >= 300) {
+        const resultado = text.substring(0, 8000);
+
+        logger?.log(
+          `EXTRACTOR: ${selector} | ${resultado.length} chars`,
+        );
+
+        return resultado;
+      }
+    }
+
+    logger?.warn(`EXTRACTOR: no se encontró contenido suficiente para ${url}`);
+
+    return '';
+  } catch (error) {
+    logger?.warn(
+      `EXTRACTOR ERROR: ${url} | ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+
     return '';
   }
 }
-
 
 function escaparTelegramHtml(texto: string): string {
   return texto
@@ -67,7 +249,7 @@ const SYSTEM_PROMPT = `MONITOREO DE PRENSA PEMEX
 
 Analiza ÚNICAMENTE el contenido de la nota proporcionada.
 
-Tu tarea es devolver exclusivamente un objeto JSON válido con esta estructura:
+Tu respuesta DEBE ser exclusivamente un objeto JSON válido con esta estructura exacta:
 
 {
   "semaforo": "🟢",
@@ -79,37 +261,128 @@ Tu tarea es devolver exclusivamente un objeto JSON válido con esta estructura:
 }
 
 REGLAS DEL SEMÁFORO:
-- 🟢 = Positiva: nota favorable para Pemex, incluyendo avances, inversiones, logros o beneficios.
-- 🟡 = Neutral: nota informativa sin valoración claramente favorable o desfavorable para Pemex.
-- 🔴 = Negativa: nota desfavorable para Pemex, incluyendo accidentes, fugas, derrames, fallas, deudas, sanciones, denuncias o irregularidades.
+
+🟢 POSITIVA
+La nota es favorable para Pemex.
+Ejemplos:
+- avances;
+- inversiones;
+- mejoras;
+- nuevos proyectos;
+- beneficios;
+- resultados positivos;
+- fortalecimiento de Pemex.
+
+🟡 NEUTRAL
+La nota es principalmente informativa y no presenta una valoración claramente favorable o desfavorable para Pemex.
+
+🔴 NEGATIVA
+La nota presenta información desfavorable para Pemex.
+Ejemplos:
+- accidentes;
+- fugas;
+- derrames;
+- fallas;
+- pérdidas;
+- deudas;
+- problemas financieros;
+- sanciones;
+- denuncias;
+- investigaciones;
+- irregularidades;
+- deterioro operativo;
+- deterioro financiero;
+- dependencia de recursos públicos;
+- riesgos para Pemex.
+
+Si existen elementos negativos materiales, NO clasifiques como neutral simplemente porque la nota también contiene información positiva.
 
 REGLAS DE LOS FRAGMENTOS:
-- Debes devolver EXACTAMENTE 3 fragmentos.
-- Cada fragmento debe ser COPIADO LITERALMENTE del contenido proporcionado.
-- NO resumas.
-- NO parafrasees.
-- NO cambies palabras.
-- NO combines partes de diferentes frases.
-- NO inventes texto.
-- Selecciona fragmentos que representen claramente la información principal de la nota.
-- Cada fragmento debe poder encontrarse literalmente dentro del contenido proporcionado.
-- No incluyas comillas alrededor de los fragmentos.
-- No incluyas bullets, guiones ni emojis dentro de los fragmentos.
 
-RESTRICCIONES ABSOLUTAS:
-- Devuelve SOLO JSON válido.
-- No uses markdown.
-- No uses bloques de código.
-- No agregues explicaciones.
-- No agregues título.
-- No agregues medio.
-- No agregues URL.
-- No agregues ningún campo adicional.
-- "semaforo" debe ser exactamente uno de: 🟢, 🟡, 🔴.
-- "fragmentos" debe contener exactamente 3 elementos.
+1. Debes devolver EXACTAMENTE 3 fragmentos.
 
-IMPORTANTE:
-El backend verificará que los 3 fragmentos existan literalmente dentro del contenido de la nota.`;
+2. Cada fragmento debe ser COPIADO LITERALMENTE del CONTENIDO DE LA NOTA proporcionado.
+
+3. NO resumas.
+
+4. NO parafrasees.
+
+5. NO cambies palabras.
+
+6. NO corrijas gramática.
+
+7. NO combines frases de diferentes partes de la nota.
+
+8. NO inventes información.
+
+9. No agregues comillas.
+
+10. No agregues bullets.
+
+11. No agregues emojis.
+
+12. Cada fragmento debe poder encontrarse literalmente dentro del contenido proporcionado.
+
+13. Los fragmentos deben ser sustanciales y representar los puntos más importantes de la nota.
+
+14. Prioriza fragmentos que contengan:
+   - hechos;
+   - cifras;
+   - declaraciones;
+   - consecuencias;
+   - información financiera u operativa relevante;
+   - información directamente relacionada con Pemex.
+
+15. Evita fragmentos que sean únicamente:
+   - títulos;
+   - nombres de autores;
+   - fechas;
+   - menús;
+   - navegación;
+   - publicidad;
+   - botones;
+   - textos de suscripción.
+
+IMPORTANTE SOBRE EL CONTENIDO:
+
+El contenido proporcionado por el backend proviene de la página original de la noticia.
+
+NO uses el título, URL o nombre del medio para inventar fragmentos.
+
+Los fragmentos deben salir EXCLUSIVAMENTE del campo "CONTENIDO DE LA NOTA".
+
+VALIDACIÓN:
+
+El backend comprobará que cada fragmento exista literalmente dentro del contenido.
+
+Si una frase parece correcta pero no aparece literalmente en el contenido, NO la utilices.
+
+FORMATO DE RESPUESTA:
+
+Devuelve SOLO JSON válido.
+
+No uses Markdown.
+
+No uses bloques de código.
+
+No agregues explicaciones.
+
+No agregues título.
+
+No agregues medio.
+
+No agregues URL.
+
+No agregues campos adicionales.
+
+"semaforo" debe ser exactamente uno de:
+🟢
+🟡
+🔴
+
+"fragmentos" debe contener exactamente 3 strings.
+
+FIN DE INSTRUCCIONES.`;
 
 
 @Injectable()
@@ -134,11 +407,16 @@ export class AlertsService {
         },
       });
 
-      const userPrompt = `Título de la nota: ${titulo}
-Medio: ${fuente}
-URL: ${urlReal}
+      const userPrompt = `Título de la nota:
+${titulo}
 
-CONTENIDO COMPLETO DE LA NOTA:
+Medio:
+${fuente}
+
+URL:
+${urlReal}
+
+CONTENIDO DE LA NOTA:
 ${contenido || 'Sin contenido disponible.'}`;
 
       const result = await model.generateContent(userPrompt);
@@ -167,37 +445,73 @@ ${contenido || 'Sin contenido disponible.'}`;
         return '';
       }
 
-      const fragmentos = parsed.fragmentos
-        .map((fragmento: unknown) =>
-          typeof fragmento === 'string' ? fragmento.trim() : '',
-        )
-        .filter(Boolean);
+      const fragmentos = parsed.fragmentos.map((fragmento: unknown) =>
+        typeof fragmento === 'string' ? fragmento.trim() : '',
+      );
 
-      if (fragmentos.length !== 3) {
-        this.logger.error('No hay exactamente 3 fragmentos válidos');
+      if (
+        fragmentos.length !== 3 ||
+        fragmentos.some(fragmento => !fragmento)
+      ) {
+        this.logger.error('Gemini no devolvió exactamente 3 fragmentos válidos');
         return '';
       }
 
-      // Validación crítica:
-      // cada fragmento DEBE existir literalmente en el artículo.
-      for (const fragmento of fragmentos) {
-        if (!contenido.includes(fragmento)) {
+      // ------------------------------------------------------
+      // VALIDACIÓN CRÍTICA:
+      // Cada fragmento debe existir literalmente en el artículo.
+      // ------------------------------------------------------
+
+      const contenidoNormalizado = contenido
+        .replace(/\u00a0/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      const fragmentosValidos = fragmentos.map(fragmento =>
+        fragmento
+          .replace(/\u00a0/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim(),
+      );
+
+      const todosLiterales = fragmentosValidos.every(fragmento =>
+        contenidoNormalizado.includes(fragmento),
+      );
+
+      if (!todosLiterales) {
+        this.logger.error(
+          'Gemini devolvió fragmentos que NO existen literalmente en el artículo',
+        );
+
+        fragmentosValidos.forEach((fragmento, index) => {
           this.logger.error(
-            'Gemini intentó parafrasear o inventar un fragmento: ' +
-              fragmento.substring(0, 200),
+            `FRAGMENTO ${index + 1}: ${fragmento.substring(0, 500)}`,
           );
-          return '';
-        }
+        });
+
+        return '';
       }
 
-      const tituloTelegram = resaltarPemex(titulo);
-      const fragmentosTelegram = fragmentos
+      // ------------------------------------------------------
+      // Construimos Telegram NOSOTROS.
+      // Gemini no controla el formato final.
+      // ------------------------------------------------------
+
+      const fragmentosTelegram = fragmentosValidos
         .map(fragmento => `• ${resaltarPemex(fragmento)}`)
         .join('\n');
 
-      return `${parsed.semaforo} ${tituloTelegram} | ${escaparTelegramHtml(fuente)} | Digital\n\n${fragmentosTelegram}\n\n${urlReal}`;
+      return `${parsed.semaforo} ${titulo} | ${fuente} | Digital
+
+${fragmentosTelegram}
+
+${urlReal}`;
     } catch (error) {
-      this.logger.error('Error Gemini: ' + error.message);
+      this.logger.error(
+        'Error Gemini: ' +
+          (error instanceof Error ? error.message : String(error)),
+      );
+
       return '';
     }
   }
@@ -208,7 +522,7 @@ ${contenido || 'Sin contenido disponible.'}`;
 
     await new Promise(r => setTimeout(r, 8000));
     const urlReal = await resolverURL(noticia.url, this.logger);
-    const articulo = await leerArticulo(urlReal);
+    const articulo = await leerArticulo(urlReal, this.logger);
     const contenido = articulo || limpiar(noticia.resumen || '');
 
     this.logger.log('===== DEBUG ALERTA =====');
