@@ -10,6 +10,20 @@ export interface Noticia {
   resumen: string;
 }
 
+function escapeRegex(texto: string): string {
+  return texto.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Google News RSS agrega " - <Fuente>" al final del <title>; no forma
+ * parte del titular real de la nota, así que lo removemos.
+ */
+function quitarSufijoFuente(titulo: string, fuente: string): string {
+  if (!fuente) return titulo;
+  const sufijo = new RegExp(`\\s*-\\s*${escapeRegex(fuente)}\\s*$`, 'i');
+  return titulo.replace(sufijo, '').trim();
+}
+
 @Injectable()
 export class ScraperService {
   private readonly logger = new Logger(ScraperService.name);
@@ -34,11 +48,12 @@ export class ScraperService {
       const items = parsed?.rss?.channel?.[0]?.item || [];
 
       const noticias: Noticia[] = items.slice(0, 10).map((item: any) => {
-        const titulo = item.title?.[0] || '';
+        const tituloCrudo = item.title?.[0] || '';
         const link = item.link?.[0] || '';
         const fuente = item.source?.[0]?._ || item.source?.[0] || 'Desconocida';
         const fecha = item.pubDate?.[0] || new Date().toISOString();
         const resumen = item.description?.[0]?.replace(/<[^>]*>/g, '') || '';
+        const titulo = quitarSufijoFuente(tituloCrudo, fuente);
         return { titulo, url: link, fuente, fecha, resumen };
       });
 

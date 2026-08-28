@@ -1,6 +1,7 @@
 import { Controller, Post, Query } from '@nestjs/common';
 import { AlertsService } from './alerts.service';
 import { ScraperService } from '../scraper/scraper.service';
+import { PEMEX_KEYWORDS } from '../keywords';
 
 @Controller('alertas')
 export class AlertsController {
@@ -43,35 +44,7 @@ export class AlertsController {
   }
 
   private async ejecutarMonitoreo(): Promise<void> {
-    const keywords = [
-      'Pemex',
-      'Sener Mexico',
-      'Juan Carlos Carpio Fragoso',
-      'Director General Pemex',
-      'Hidrocarburos Mexico',
-      'Huachicol',
-      'Toma Clandestina combustible',
-      'Pemex Gas',
-      'Pemex Diesel',
-      'Pemex Gasolina',
-      'Pemex Petroleo',
-      'Refineria Cadereyta',
-      'Pemex Contaminacion',
-      'Pemex Desabasto',
-      'Robo combustible Mexico',
-      'Pemex Ducto',
-      'Pemex Poliducto',
-      'Pemex Gasoducto',
-      'Pemex Pipa',
-      'Pemex Autotanque',
-      'Pemex Terminal almacenamiento',
-      'Pemex TAD',
-      'Pemex Gas LP',
-      'Pemex Incendio',
-      'Pemex Explosion',
-      'Pemex Derrame',
-      'Pemex Fuga',
-    ];
+    const keywords = PEMEX_KEYWORDS;
 
     const hace24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
 

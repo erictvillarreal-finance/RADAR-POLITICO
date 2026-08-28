@@ -2,37 +2,8 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { ScraperService } from '../scraper/scraper.service';
 import { AlertsService } from '../alerts/alerts.service';
+import { PEMEX_KEYWORDS } from '../keywords';
 import Redis from 'ioredis';
-
-const KEYWORDS = [
-  'Pemex',
-  'Sener Mexico',
-  'Juan Carlos Carpio Fragoso',
-  'Director General Pemex',
-  'Hidrocarburos',
-  'Huachicol',
-  'Toma Clandestina',
-  'Gas Mexico',
-  'Diesel Mexico',
-  'Gasolina Mexico',
-  'Petroleo Mexico',
-  'Refineria Cadereyta',
-  'Contaminacion Pemex',
-  'Desabasto combustible',
-  'Robo combustible',
-  'Ducto Mexico',
-  'Poliducto',
-  'Gasoducto Mexico',
-  'Pipa combustible',
-  'Autotanque',
-  'Terminal almacenamiento combustible',
-  'TAD Pemex',
-  'Gas LP Mexico',
-  'Incendio refineria',
-  'Explosion ducto',
-  'Derrame petroleo',
-  'Fuga gas Mexico',
-];
 
 @Injectable()
 export class MonitorService implements OnModuleInit {
@@ -62,7 +33,7 @@ export class MonitorService implements OnModuleInit {
       this.logger.log('Iniciando monitoreo ' + new Date().toLocaleString('es-MX'));
       const hace24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-      for (const keyword of KEYWORDS) {
+      for (const keyword of PEMEX_KEYWORDS) {
         await new Promise(r => setTimeout(r, 15000));
         const noticias = await this.scraperService.scrapearGoogleNews(keyword);
 
