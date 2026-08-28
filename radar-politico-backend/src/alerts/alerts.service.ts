@@ -86,7 +86,7 @@ export class AlertsService {
   async generarMensaje(titulo: string, fuente: string, urlReal: string, contenido: string): Promise<string> {
     try {
       const model = this.genAI.getGenerativeModel({
-        model: 'gemini-2.0-flash',
+        model: 'gemini-3.6-flash',
         systemInstruction: SYSTEM_PROMPT,
       });
 
@@ -113,7 +113,21 @@ ${contenido || 'Sin contenido disponible - usa solo el título.'}`;
     const articulo = await leerArticulo(urlReal);
     const contenido = articulo || limpiar(noticia.resumen || '');
 
+    this.logger.log('===== DEBUG ALERTA =====');
+    this.logger.log('TITULO: ' + titulo);
+    this.logger.log('FUENTE: ' + fuente);
+    this.logger.log('URL GOOGLE: ' + noticia.url);
+    this.logger.log('URL REAL: ' + urlReal);
+    this.logger.log('ARTICULO LENGTH: ' + articulo.length);
+    this.logger.log('CONTENIDO LENGTH: ' + contenido.length);
+    this.logger.log('CONTENIDO INICIO: ' + contenido.substring(0, 1500));
+    this.logger.log('===== FIN DEBUG =====');
+
     const mensajeIA = await this.generarMensaje(titulo, fuente, urlReal, contenido);
+    this.logger.log('===== GEMINI OUTPUT =====');
+    this.logger.log(mensajeIA);
+    this.logger.log('===== FIN GEMINI OUTPUT =====');
+
     const mensaje = mensajeIA || `🟡 ${titulo} | ${fuente} | Digital\n• ${limpiar(noticia.resumen || 'Sin descripción')}\n${urlReal}`;
 
     try {
