@@ -30,7 +30,7 @@ async function resolverURL(googleUrl: string, logger: Logger): Promise<string> {
 async function leerArticulo(
   url: string,
   logger?: Logger,
-): Promise<string> {
+): Promise<string[]> {
   try {
     const { data } = await axios.get(url, {
       timeout: 15000,
@@ -47,188 +47,151 @@ async function leerArticulo(
 
     const $ = cheerio.load(data);
 
-    const limpiarTexto = (texto: string): string => {
-      return texto
-        .replace(/\u00a0/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-    };
+    /*
+     * Eliminamos elementos que no forman parte del cuerpo editorial.
+     */
+    $(
+      'script, style, nav, header, footer, aside, noscript, iframe, form, ' +
+      '.advertisement, .ads, .social, .share, .related, .recommended',
+    ).remove();
 
-    const limpiarFragmentos = (fragmentos: string[]): string => {
-      const vistos = new Set<string>();
-
-      return fragmentos
-        .map(limpiarTexto)
-        .filter(texto => texto.length >= 40)
-        .filter(texto => {
-          const key = texto.toLowerCase();
-
-          if (vistos.has(key)) return false;
-
-          vistos.add(key);
-          return true;
-        })
-        .join(' ')
-        .trim();
-    };
-
-    // --------------------------------------------------------
-    // MÉTODO 1 — JSON-LD articleBody
-    // Muy importante para Excélsior y otros publishers.
-    // --------------------------------------------------------
-
+    /*
+     * MÉTODO 1 — JSON-LD articleBody
+     *
+     * Muchos publishers modernos exponen el artículo completo aquí.
+     */
     const jsonLdBodies: string[] = [];
 
     $('script[type="application/ld+json"]').each((_, el) => {
-      const raw = $(el).text().trim();
-
-      if (!raw) return;
-
       try {
-        const parsed = JSON.parse(raw);
+        const raw = $(el).contents().text().trim();
+        if (!raw) return;
 
-        const items = Array.isArray(parsed)
-          ? parsed
-          : Array.isArray(parsed?.['@graph'])
-            ? parsed['@graph']
-            : [parsed];
+        const parsed = JSON.parse(raw);
+        const items = Array.isArray(parsed) ? parsed : [parsed];
 
         for (const item of items) {
           if (
             item &&
             typeof item === 'object' &&
             typeof item.articleBody === 'string' &&
-            item.articleBody.length >= 300
+            item.articleBody.length > 300
           ) {
             jsonLdBodies.push(item.articleBody);
           }
+
+          if (
+            item &&
+            typeof item === 'object' &&
+            Array.isArray(item['@graph'])
+          ) {
+            for (const graphItem of item['@graph']) {
+              if (
+                graphItem &&
+                typeof graphItem.articleBody === 'string' &&
+                graphItem.articleBody.length > 300
+              ) {
+                jsonLdBodies.push(graphItem.articleBody);
+              }
+            }
+          }
         }
       } catch {
-        // Algunos publishers tienen JSON-LD inválido.
-        // Continuamos con los demás métodos.
+        // JSON-LD inválido: continuamos con HTML.
       }
     });
 
-    if (jsonLdBodies.length > 0) {
-      const body = limpiarFragmentos(jsonLdBodies);
-
-      if (body.length >= 300) {
-        const resultado = body.substring(0, 8000);
-
-        logger?.log(
-          `EXTRACTOR: JSON-LD articleBody | ${resultado.length} chars`,
-        );
-
-        return resultado;
-      }
-    }
-
-    // --------------------------------------------------------
-    // Remover elementos que NO forman parte del artículo.
-    // --------------------------------------------------------
-
-    $(
-      'script, style, noscript, nav, header, footer, aside, ' +
-      'form, iframe, svg, canvas, video, audio, ' +
-      '[aria-label*="share" i], ' +
-      '[class*="share" i], ' +
-      '[class*="social" i], ' +
-      '[class*="advert" i], ' +
-      '[class*="banner" i], ' +
-      '[class*="newsletter" i], ' +
-      '[class*="related" i], ' +
-      '[class*="recommended" i], ' +
-      '[class*="comment" i]'
-    ).remove();
-
-    // --------------------------------------------------------
-    // MÉTODO 2 — article p
-    // --------------------------------------------------------
-
+    /*
+     * MÉTODO 2 — article p
+     */
     const articleParagraphs = $('article p')
-      .map((_, el) => $(el).text())
-      .get();
+      .map((_, el) => $(el).text().replace(/\s+/g, ' ').trim())
+      .get()
+      .filter((text: string) => text.length >= 40);
 
-    const articleText = limpiarFragmentos(articleParagraphs);
-
-    if (articleText.length >= 300) {
-      const resultado = articleText.substring(0, 8000);
-
-      logger?.log(
-        `EXTRACTOR: article p | ${resultado.length} chars`,
-      );
-
-      return resultado;
-    }
-
-    // --------------------------------------------------------
-    // MÉTODO 3 — itemprop articleBody
-    // --------------------------------------------------------
-
-    const itemPropParagraphs = $(
-      '[itemprop="articleBody"] p, [itemprop="articleBody"]',
+    /*
+     * MÉTODO 3 — main p / selectores editoriales.
+     */
+    const fallbackParagraphs = $(
+      'main p, .content p, .nota p, .entry-content p, ' +
+      '[class*="article-body"] p, [class*="article-content"] p, ' +
+      '[class*="ArticleBody"] p',
     )
-      .map((_, el) => $(el).text())
-      .get();
+      .map((_, el) => $(el).text().replace(/\s+/g, ' ').trim())
+      .get()
+      .filter((text: string) => text.length >= 40);
 
-    const itemPropText = limpiarFragmentos(itemPropParagraphs);
+    let paragraphs: string[] = [];
 
-    if (itemPropText.length >= 300) {
-      const resultado = itemPropText.substring(0, 8000);
-
-      logger?.log(
-        `EXTRACTOR: itemprop articleBody | ${resultado.length} chars`,
-      );
-
-      return resultado;
+    if (jsonLdBodies.length > 0) {
+      paragraphs = jsonLdBodies
+        .flatMap(body =>
+          body
+            .split(/\n+/)
+            .map((text: string) => text.replace(/\s+/g, ' ').trim()),
+        )
+        .filter((text: string) => text.length >= 40);
     }
 
-    // --------------------------------------------------------
-    // MÉTODO 4 — Selectores editoriales conocidos
-    // --------------------------------------------------------
+    if (paragraphs.length < 3 && articleParagraphs.length >= 3) {
+      paragraphs = articleParagraphs;
+    }
 
-    const selectors = [
-      '.article-body p',
-      '.article-content p',
-      '.post-content p',
-      '.entry-content p',
-      '.story-body p',
-      '.story-content p',
-      '.nota p',
-      '.contenido-nota p',
-      '.content p',
-      'main p',
-    ];
+    if (paragraphs.length < 3 && fallbackParagraphs.length >= 3) {
+      paragraphs = fallbackParagraphs;
+    }
 
-    for (const selector of selectors) {
-      const paragraphs = $(selector)
-        .map((_, el) => $(el).text())
-        .get();
+    /*
+     * Eliminamos duplicados preservando el orden.
+     */
+    paragraphs = [...new Set(paragraphs)];
 
-      const text = limpiarFragmentos(paragraphs);
+    /*
+     * Convertimos párrafos largos en unidades editoriales más pequeñas.
+     *
+     * IMPORTANTE:
+     * Cada candidato sigue siendo texto REAL extraído del publisher.
+     * Gemini únicamente elegirá IDs; nunca tendrá que reconstruir el texto.
+     */
+    const candidatos: string[] = [];
 
-      if (text.length >= 300) {
-        const resultado = text.substring(0, 8000);
+    for (const paragraph of paragraphs) {
+      const frases = paragraph
+        .match(/[^.!?…]+(?:[.!?…]+|$)/g)
+        ?.map((x: string) => x.trim())
+        .filter((x: string) => x.length >= 45) || [];
 
-        logger?.log(
-          `EXTRACTOR: ${selector} | ${resultado.length} chars`,
-        );
-
-        return resultado;
+      if (frases.length > 0) {
+        candidatos.push(...frases);
+      } else if (paragraph.length >= 45) {
+        candidatos.push(paragraph);
       }
     }
 
-    logger?.warn(`EXTRACTOR: no se encontró contenido suficiente para ${url}`);
+    const unicos = [...new Set(candidatos)];
 
-    return '';
-  } catch (error) {
-    logger?.warn(
-      `EXTRACTOR ERROR: ${url} | ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+    /*
+     * Evitamos enviar basura o fragmentos editoriales demasiado cortos.
+     */
+    const resultado = unicos
+      .filter(texto => texto.length >= 45)
+      .slice(0, 80);
+
+    logger?.log(
+      `EXTRACTOR: ${resultado.length} candidatos editoriales encontrados`,
     );
 
-    return '';
+    if (resultado.length > 0) {
+      logger?.log(`EXTRACTOR CANDIDATO 0: ${resultado[0]}`);
+    }
+
+    return resultado;
+  } catch (error) {
+    logger?.warn(
+      'Extractor fallo: ' +
+        (error instanceof Error ? error.message : String(error)),
+    );
+    return [];
   }
 }
 
@@ -396,35 +359,101 @@ export class AlertsService {
     titulo: string,
     fuente: string,
     urlReal: string,
-    contenido: string,
+    candidatos: string[],
   ): Promise<string> {
     try {
+      if (candidatos.length < 3) {
+        this.logger.error(
+          `No hay suficientes candidatos editoriales: ${candidatos.length}`,
+        );
+        return '';
+      }
+
+      const candidatosNumerados = candidatos
+        .map((texto, index) => `[${index}] ${texto}`)
+        .join('\n');
+
       const model = this.genAI.getGenerativeModel({
         model: 'gemini-3.6-flash',
-        systemInstruction: SYSTEM_PROMPT,
+        systemInstruction: `MONITOREO DE PRENSA PEMEX
+
+Tu tarea es analizar una nota periodística sobre Pemex y devolver ÚNICAMENTE JSON válido.
+
+ESTRUCTURA OBLIGATORIA:
+
+{
+  "semaforo": "🟢",
+  "fragmentos": [0, 1, 2]
+}
+
+REGLAS DEL SEMÁFORO:
+
+🟢 = Positiva:
+La nota presenta información favorable para Pemex, como avances, inversiones, logros, mejoras, beneficios, acuerdos favorables o resultados positivos.
+
+🟡 = Neutral:
+La nota es principalmente informativa y no presenta una valoración claramente favorable o desfavorable para Pemex.
+
+🔴 = Negativa:
+La nota presenta información desfavorable para Pemex, como accidentes, fugas, derrames, fallas, deudas, pérdidas, sanciones, denuncias, irregularidades, problemas financieros, deterioro operativo, críticas o riesgos.
+
+REGLAS DE LOS FRAGMENTOS:
+
+1. Debes seleccionar EXACTAMENTE 3 IDs.
+2. Cada ID debe corresponder a uno de los candidatos proporcionados.
+3. Los IDs deben ser números enteros válidos.
+4. Los 3 IDs deben ser diferentes.
+5. Selecciona los 3 candidatos que mejor representen la información principal de la nota.
+6. Prioriza hechos concretos, cifras, declaraciones o información relevante sobre Pemex.
+7. No selecciones frases irrelevantes como fechas, créditos, autores, navegación, publicidad o redes sociales.
+8. NO escribas los fragmentos.
+9. NO modifiques ningún texto.
+10. NO inventes texto.
+11. Tu única función respecto de los fragmentos es seleccionar sus IDs.
+
+RESTRICCIONES ABSOLUTAS:
+
+- Devuelve SOLO JSON.
+- No uses markdown.
+- No uses bloques de código.
+- No agregues explicaciones.
+- No agregues título.
+- No agregues medio.
+- No agregues URL.
+- No agregues campos adicionales.
+- "semaforo" debe ser exactamente uno de: 🟢, 🟡, 🔴.
+- "fragmentos" debe contener exactamente 3 IDs diferentes.
+- Todos los IDs deben existir en la lista proporcionada.
+
+IMPORTANTE:
+
+El backend recuperará directamente el texto original asociado a los IDs seleccionados. Gemini NO debe reconstruir ni escribir los fragmentos.`,
         generationConfig: {
           responseMimeType: 'application/json',
         },
       });
 
-      const userPrompt = `Título de la nota:
+      const userPrompt = `TÍTULO:
 ${titulo}
 
-Medio:
+MEDIO:
 ${fuente}
 
 URL:
 ${urlReal}
 
-CONTENIDO DE LA NOTA:
-${contenido || 'Sin contenido disponible.'}`;
+CANDIDATOS TEXTUALES EXTRAÍDOS DIRECTAMENTE DE LA NOTA:
+
+${candidatosNumerados}
+
+Selecciona exactamente 3 IDs que representen mejor la información principal de la nota.`;
 
       const result = await model.generateContent(userPrompt);
       const raw = result.response.text().trim();
 
-      this.logger.log('===== GEMINI RAW JSON =====');
+      this.logger.log('===== GEMINI SELECCION JSON =====');
       this.logger.log(raw);
-      this.logger.log('===== FIN GEMINI RAW JSON =====');
+      this.logger.log('===== FIN GEMINI SELECCION JSON =====');
 
       let parsed: any;
 
@@ -445,67 +474,52 @@ ${contenido || 'Sin contenido disponible.'}`;
         return '';
       }
 
-      const fragmentos = parsed.fragmentos.map((fragmento: unknown) =>
-        typeof fragmento === 'string' ? fragmento.trim() : '',
-      );
+      const indices = parsed.fragmentos.map((value: unknown) => {
+        if (typeof value === 'number' && Number.isInteger(value)) {
+          return value;
+        }
+
+        if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
+          return Number(value.trim());
+        }
+
+        return -1;
+      });
 
       if (
-        fragmentos.length !== 3 ||
-        fragmentos.some(fragmento => !fragmento)
+        indices.some(index => index < 0 || index >= candidatos.length) ||
+        new Set(indices).size !== 3
       ) {
-        this.logger.error('Gemini no devolvió exactamente 3 fragmentos válidos');
-        return '';
-      }
-
-      // ------------------------------------------------------
-      // VALIDACIÓN CRÍTICA:
-      // Cada fragmento debe existir literalmente en el artículo.
-      // ------------------------------------------------------
-
-      const contenidoNormalizado = contenido
-        .replace(/\u00a0/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-
-      const fragmentosValidos = fragmentos.map(fragmento =>
-        fragmento
-          .replace(/\u00a0/g, ' ')
-          .replace(/\s+/g, ' ')
-          .trim(),
-      );
-
-      const todosLiterales = fragmentosValidos.every(fragmento =>
-        contenidoNormalizado.includes(fragmento),
-      );
-
-      if (!todosLiterales) {
         this.logger.error(
-          'Gemini devolvió fragmentos que NO existen literalmente en el artículo',
+          `Gemini devolvió IDs inválidos: ${JSON.stringify(indices)}`,
         );
-
-        fragmentosValidos.forEach((fragmento, index) => {
-          this.logger.error(
-            `FRAGMENTO ${index + 1}: ${fragmento.substring(0, 500)}`,
-          );
-        });
-
         return '';
       }
 
-      // ------------------------------------------------------
-      // Construimos Telegram NOSOTROS.
-      // Gemini no controla el formato final.
-      // ------------------------------------------------------
+      /*
+       * CRÍTICO:
+       *
+       * Gemini solamente seleccionó IDs.
+       * El texto que llegará a Telegram viene directamente del extractor.
+       */
+      const fragmentosSeleccionados = indices.map(
+        index => candidatos[index],
+      );
 
-      const fragmentosTelegram = fragmentosValidos
+      if (fragmentosSeleccionados.length !== 3) {
+        this.logger.error('No se pudieron recuperar 3 fragmentos');
+        return '';
+      }
+
+      const fragmentosTelegram = fragmentosSeleccionados
         .map(fragmento => `• ${resaltarPemex(fragmento)}`)
         .join('\n');
 
-      return `${parsed.semaforo} ${titulo} | ${fuente} | Digital
+      return `${parsed.semaforo} ${escaparTelegramHtml(titulo)} | ${escaparTelegramHtml(fuente)} | Digital
 
 ${fragmentosTelegram}
 
-${urlReal}`;
+${escaparTelegramHtml(urlReal)}`;
     } catch (error) {
       this.logger.error(
         'Error Gemini: ' +
@@ -521,36 +535,94 @@ ${urlReal}`;
     const fuente = limpiar(noticia.fuente);
 
     const urlReal = await resolverURL(noticia.url, this.logger);
-    const articulo = await leerArticulo(urlReal, this.logger);
-    const contenido = articulo || limpiar(noticia.resumen || '');
+    const candidatos = await leerArticulo(urlReal, this.logger);
+
+    /*
+     * Si el publisher no pudo ser extraído, usamos el resumen como
+     * último recurso, pero NO fingimos que son tres fragmentos.
+     */
+    if (candidatos.length < 3) {
+      this.logger.warn(
+        `No se obtuvieron suficientes candidatos para: ${titulo}`,
+      );
+
+      const resumen = limpiar(noticia.resumen || '');
+
+      if (!resumen) {
+        this.logger.warn(`Sin contenido disponible: ${titulo}`);
+        return;
+      }
+
+      /*
+       * Intentamos construir candidatos únicamente a partir del resumen
+       * real recibido de Google News.
+       */
+      const fallback = resumen
+        .match(/[^.!?…]+(?:[.!?…]+|$)/g)
+        ?.map((x: string) => x.trim())
+        .filter((x: string) => x.length >= 30) || [];
+
+      if (fallback.length < 3) {
+        this.logger.warn(
+          `Contenido insuficiente incluso en fallback: ${titulo}`,
+        );
+        return;
+      }
+
+      candidatos.push(...fallback);
+    }
 
     this.logger.log('===== DEBUG ALERTA =====');
     this.logger.log('TITULO: ' + titulo);
     this.logger.log('FUENTE: ' + fuente);
     this.logger.log('URL GOOGLE: ' + noticia.url);
     this.logger.log('URL REAL: ' + urlReal);
-    this.logger.log('ARTICULO LENGTH: ' + articulo.length);
-    this.logger.log('CONTENIDO LENGTH: ' + contenido.length);
-    this.logger.log('CONTENIDO INICIO: ' + contenido.substring(0, 1500));
+    this.logger.log('CANDIDATOS: ' + candidatos.length);
     this.logger.log('===== FIN DEBUG =====');
 
-    const mensajeIA = await this.generarMensaje(titulo, fuente, urlReal, contenido);
-    this.logger.log('===== GEMINI OUTPUT =====');
-    this.logger.log(mensajeIA);
-    this.logger.log('===== FIN GEMINI OUTPUT =====');
+    const mensajeIA = await this.generarMensaje(
+      titulo,
+      fuente,
+      urlReal,
+      candidatos,
+    );
 
-    const mensaje = mensajeIA || `🟡 ${titulo} | ${fuente} | Digital\n• ${limpiar(noticia.resumen || 'Sin descripción')}\n${urlReal}`;
+    this.logger.log('===== MENSAJE FINAL =====');
+    this.logger.log(mensajeIA);
+    this.logger.log('===== FIN MENSAJE FINAL =====');
+
+    /*
+     * No enviamos fallback de una sola línea.
+     *
+     * Si Gemini no puede producir el contrato completo, preferimos
+     * NO mandar una alerta incompleta antes que romper el formato.
+     */
+    if (!mensajeIA) {
+      this.logger.warn(
+        `Alerta descartada por no cumplir contrato: ${titulo}`,
+      );
+      return;
+    }
 
     try {
-      await axios.post(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
-        chat_id: this.chatId,
-        text: mensaje,
-        parse_mode: 'HTML',
-        disable_web_page_preview: false,
-      });
-      this.logger.log('Alerta enviada: ' + titulo.substring(0, 60));
+      await axios.post(
+        `https://api.telegram.org/bot${this.botToken}/sendMessage`,
+        {
+          chat_id: this.chatId,
+          text: mensajeIA,
+          parse_mode: 'HTML',
+          disable_web_page_preview: false,
+        },
+      );
+
+      this.logger.log(
+        'Alerta enviada: ' + titulo.substring(0, 60),
+      );
     } catch (error) {
-      this.logger.error('Error Telegram: ' + error.message);
+      this.logger.error(
+        'Error Telegram: ' +
+          (error instanceof Error ? error.message : String(error)),
+      );
     }
   }
 
