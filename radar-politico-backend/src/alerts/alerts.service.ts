@@ -520,7 +520,6 @@ ${urlReal}`;
     const titulo = limpiar(noticia.titulo);
     const fuente = limpiar(noticia.fuente);
 
-    await new Promise(r => setTimeout(r, 8000));
     const urlReal = await resolverURL(noticia.url, this.logger);
     const articulo = await leerArticulo(urlReal, this.logger);
     const contenido = articulo || limpiar(noticia.resumen || '');
