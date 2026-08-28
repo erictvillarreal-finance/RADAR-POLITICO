@@ -1,9 +1,16 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import Anthropic from '@anthropic-ai/sdk';
+import { z } from 'zod';
+import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { GoogleDecoder } from 'google-news-url-decoder';
 import { Noticia } from '../scraper/scraper.service';
+
+const ClasificacionSchema = z.object({
+  semaforo: z.enum(['🟢', '🟡', '🔴']),
+  fragmentos: z.array(z.number().int()).length(3),
+});
 
 const decoder = new GoogleDecoder();
 
@@ -151,7 +158,7 @@ async function leerArticulo(
      *
      * IMPORTANTE:
      * Cada candidato sigue siendo texto REAL extraído del publisher.
-     * Gemini únicamente elegirá IDs; nunca tendrá que reconstruir el texto.
+     * Claude únicamente elegirá IDs; nunca tendrá que reconstruir el texto.
      */
     const candidatos: string[] = [];
 
@@ -216,7 +223,7 @@ export class AlertsService {
   private readonly logger = new Logger(AlertsService.name);
   private readonly botToken = process.env.TELEGRAM_BOT_TOKEN;
   private readonly chatId = process.env.TELEGRAM_CHAT_ID;
-  private readonly genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+  private readonly anthropic = new Anthropic();
 
   async generarMensaje(
     titulo: string,
@@ -236,18 +243,9 @@ export class AlertsService {
         .map((texto, index) => `[${index}] ${texto}`)
         .join('\n');
 
-      const model = this.genAI.getGenerativeModel({
-        model: 'gemini-3.6-flash',
-        systemInstruction: `MONITOREO DE PRENSA PEMEX
+      const systemPrompt = `MONITOREO DE PRENSA PEMEX
 
-Tu tarea es analizar una nota periodística sobre Pemex y devolver ÚNICAMENTE JSON válido.
-
-ESTRUCTURA OBLIGATORIA:
-
-{
-  "semaforo": "🟢",
-  "fragmentos": [0, 1, 2]
-}
+Tu tarea es analizar una nota periodística sobre Pemex y clasificarla.
 
 REGLAS DEL SEMÁFORO:
 
@@ -264,37 +262,15 @@ REGLAS DE LOS FRAGMENTOS:
 
 1. Debes seleccionar EXACTAMENTE 3 IDs.
 2. Cada ID debe corresponder a uno de los candidatos proporcionados.
-3. Los IDs deben ser números enteros válidos.
-4. Los 3 IDs deben ser diferentes.
-5. Selecciona los 3 candidatos que mejor representen la información principal de la nota.
-6. Prioriza hechos concretos, cifras, declaraciones o información relevante sobre Pemex.
-7. No selecciones frases irrelevantes como fechas, créditos, autores, navegación, publicidad o redes sociales.
-8. NO escribas los fragmentos.
-9. NO modifiques ningún texto.
-10. NO inventes texto.
-11. Tu única función respecto de los fragmentos es seleccionar sus IDs.
-
-RESTRICCIONES ABSOLUTAS:
-
-- Devuelve SOLO JSON.
-- No uses markdown.
-- No uses bloques de código.
-- No agregues explicaciones.
-- No agregues título.
-- No agregues medio.
-- No agregues URL.
-- No agregues campos adicionales.
-- "semaforo" debe ser exactamente uno de: 🟢, 🟡, 🔴.
-- "fragmentos" debe contener exactamente 3 IDs diferentes.
-- Todos los IDs deben existir en la lista proporcionada.
+3. Los 3 IDs deben ser diferentes.
+4. Selecciona los 3 candidatos que mejor representen la información principal de la nota.
+5. Prioriza hechos concretos, cifras, declaraciones o información relevante sobre Pemex.
+6. No selecciones frases irrelevantes como fechas, créditos, autores, navegación, publicidad o redes sociales.
+7. NO escribas los fragmentos, NO los modifiques, NO inventes texto. Tu única función respecto de los fragmentos es seleccionar sus IDs.
 
 IMPORTANTE:
 
-El backend recuperará directamente el texto original asociado a los IDs seleccionados. Gemini NO debe reconstruir ni escribir los fragmentos.`,
-        generationConfig: {
-          responseMimeType: 'application/json',
-        },
-      });
+El backend recuperará directamente el texto original asociado a los IDs seleccionados. No debes reconstruir ni escribir los fragmentos.`;
 
       const userPrompt = `TÍTULO:
 ${titulo}
@@ -311,50 +287,35 @@ ${candidatosNumerados}
 
 Selecciona exactamente 3 IDs que representen mejor la información principal de la nota.`;
 
-      const result = await model.generateContent(userPrompt);
-      const raw = result.response.text().trim();
-
-      this.logger.log('===== GEMINI SELECCION JSON =====');
-      this.logger.log(raw);
-      this.logger.log('===== FIN GEMINI SELECCION JSON =====');
-
-      let parsed: any;
-
-      try {
-        parsed = JSON.parse(raw);
-      } catch {
-        this.logger.error('Gemini devolvió JSON inválido');
-        return '';
-      }
-
-      if (
-        !parsed ||
-        !['🟢', '🟡', '🔴'].includes(parsed.semaforo) ||
-        !Array.isArray(parsed.fragmentos) ||
-        parsed.fragmentos.length !== 3
-      ) {
-        this.logger.error('Gemini devolvió una estructura inválida');
-        return '';
-      }
-
-      const indices = parsed.fragmentos.map((value: unknown) => {
-        if (typeof value === 'number' && Number.isInteger(value)) {
-          return value;
-        }
-
-        if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
-          return Number(value.trim());
-        }
-
-        return -1;
+      const response = await this.anthropic.messages.parse({
+        model: 'claude-haiku-4-5',
+        max_tokens: 256,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userPrompt }],
+        output_config: {
+          format: zodOutputFormat(ClasificacionSchema),
+        },
       });
+
+      this.logger.log('===== CLAUDE SELECCION JSON =====');
+      this.logger.log(JSON.stringify(response.parsed_output));
+      this.logger.log('===== FIN CLAUDE SELECCION JSON =====');
+
+      const parsed = response.parsed_output;
+
+      if (!parsed) {
+        this.logger.error('Claude devolvió una estructura inválida');
+        return '';
+      }
+
+      const indices = parsed.fragmentos;
 
       if (
         indices.some(index => index < 0 || index >= candidatos.length) ||
         new Set(indices).size !== 3
       ) {
         this.logger.error(
-          `Gemini devolvió IDs inválidos: ${JSON.stringify(indices)}`,
+          `Claude devolvió IDs inválidos: ${JSON.stringify(indices)}`,
         );
         return '';
       }
@@ -362,7 +323,7 @@ Selecciona exactamente 3 IDs que representen mejor la información principal de 
       /*
        * CRÍTICO:
        *
-       * Gemini solamente seleccionó IDs.
+       * Claude solamente seleccionó IDs.
        * El texto que llegará a Telegram viene directamente del extractor.
        */
       const fragmentosSeleccionados = indices.map(
@@ -384,10 +345,20 @@ ${fragmentosTelegram}
 
 ${escaparTelegramHtml(urlReal)}`;
     } catch (error) {
-      this.logger.error(
-        'Error Gemini: ' +
-          (error instanceof Error ? error.message : String(error)),
-      );
+      if (error instanceof Anthropic.RateLimitError) {
+        this.logger.error('Claude rate limit alcanzado: ' + error.message);
+      } else if (error instanceof Anthropic.AuthenticationError) {
+        this.logger.error('Claude API key inválida: ' + error.message);
+      } else if (error instanceof Anthropic.APIError) {
+        this.logger.error(
+          `Error Claude (${error.status}): ` + error.message,
+        );
+      } else {
+        this.logger.error(
+          'Error Claude: ' +
+            (error instanceof Error ? error.message : String(error)),
+        );
+      }
 
       return '';
     }
@@ -457,7 +428,7 @@ ${escaparTelegramHtml(urlReal)}`;
     /*
      * No enviamos fallback de una sola línea.
      *
-     * Si Gemini no puede producir el contrato completo, preferimos
+     * Si Claude no puede producir el contrato completo, preferimos
      * NO mandar una alerta incompleta antes que romper el formato.
      */
     if (!mensajeIA) {
